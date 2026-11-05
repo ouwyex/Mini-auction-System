@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}My bids | Mini Auction{% endblock %}
+{% block content %}<div class="page-heading"><div><p class="eyebrow">Your activity</p><h1>My bids</h1><p>Every bid you have placed, all in one place.</p></div></div>
+{% if bids %}<ul class="data-list">{% for bid in bids %}<li><span><a href="{{ url_for('lot_detail', lot_id=bid['id']) }}">{{ bid['title'] }}</a><br><span class="status-text">Your bid · {{ "%.2f"|format(bid['my_bid']) }}</span></span><span class="tag">{{ 'Won' if bid['won'] else bid['status'] }}</span></li>{% endfor %}</ul>
+{% else %}<div class="empty-state">You have not placed any bids yet. The next great find is out there.</div>{% endif %}{% endblock %}

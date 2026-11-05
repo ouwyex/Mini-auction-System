@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{% if editing %}Edit lot{% else %}Create a lot{% endif %} | Mini Auction{% endblock %}
+{% block content %}<div class="page-heading"><div><p class="eyebrow">Share something special</p><h1>{% if editing %}Edit your lot{% else %}Create a lot{% endif %}</h1><p>Add the details, set your starting price, and let the bidding begin.</p></div></div>
+<form method="post" class="form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>Lot title <input name="title" required maxlength="120" value="{{ lot['title'] if lot else '' }}" placeholder="Give your item a memorable name"></label>
+  <label>Description <textarea name="description" required rows="5" placeholder="Tell bidders what makes it special">{{ lot['description'] if lot else '' }}</textarea></label>
+  <label>Starting price <input type="number" name="start_price" min="0.01" step="0.01" required value="{{ lot['start_price'] if lot else '' }}"></label>
+  <label>Minimum bid increment <input type="number" name="bid_step" min="0.01" step="0.01" required value="{{ lot['bid_step'] if lot else '' }}"></label>
+  <label>Closing time (UTC) <input type="datetime-local" name="closes_at" required value="{{ lot['closes_at'][:16] if lot else '' }}"></label>
+  <button type="submit">{{ 'Save changes' if editing else 'Publish lot' }}</button>
+</form>{% endblock %}

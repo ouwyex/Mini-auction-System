@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Discover lots | Mini Auction{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="hero-copy"><p class="eyebrow">A better kind of marketplace</p><h1>Find the one.<br>Make it yours.</h1><p>One-of-a-kind finds, a little friendly competition, and the thrill of the final bid.</p><a class="button" href="#active-lots">Explore active lots <span aria-hidden="true">↓</span></a></div>
+  <aside class="hero-note"><strong>Good things go to good homes.</strong><span>Browse the latest lots and place a bid when something catches your eye.</span></aside>
+</section>
+<section id="active-lots">
+<div class="section-head"><div><p class="eyebrow">The current collection</p><h2>Active lots</h2></div><p>Find your next favorite thing.</p></div>
+{% if lots %}
+<div class="cards">
+{% for item in lots %}{% set lot = item['lot'] %}
+  <article class="lot-card">
+    <div class="lot-art" aria-hidden="true"><span>{{ lot['title'][:1] }}</span></div>
+    <div class="lot-body">
+      <div class="lot-topline"><span class="tag">Live auction</span><span class="lot-time">{{ item['remaining'] }} left</span></div>
+      <h3 class="lot-title"><a href="{{ url_for('lot_detail', lot_id=lot['id']) }}">{{ lot['title'] }}</a></h3>
+      <div class="price-row"><div><span class="price-label">Current bid</span><strong class="price">{{ "%.2f"|format(lot['current_price']) }}</strong></div><span class="arrow" aria-hidden="true">↗</span></div>
+    </div>
+  </article>
+{% endfor %}
+</div>
+{% else %}<div class="empty-state">No active lots right now. Check back soon for something special.</div>{% endif %}
+</section>
+{% endblock %}

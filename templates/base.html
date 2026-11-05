@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Mini Auction{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="{{ url_for('home') }}"><span class="brand-mark" aria-hidden="true">M.</span> Mini Auction</a>
+    <nav>
+      <a href="{{ url_for('home') }}">Lots</a>
+      {% if current_user %}
+        {% if current_user['role'] == 'user' %}<a href="{{ url_for('my_lots') }}">My lots</a><a href="{{ url_for('create_lot') }}">Create lot</a><a href="{{ url_for('my_bids') }}">My bids</a>{% endif %}
+        {% if current_user['role'] == 'admin' %}<a href="{{ url_for('admin') }}">Admin</a>{% endif %}
+        <span class="account-label">{{ current_user['email'] }}</span>
+        <form class="inline" method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Log out</button></form>
+      {% else %}
+        <a href="{{ url_for('login') }}">Log in</a><a href="{{ url_for('register') }}">Register</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main>
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <p class="message {{ category }}">{{ message }}</p>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer"><span>Mini Auction <span aria-hidden="true">·</span> A marketplace for good finds.</span><span>Discover something worth bidding on.</span></footer>
+</body>
+</html>

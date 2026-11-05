@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Admin | Mini Auction{% endblock %}
+{% block content %}<div class="page-heading"><div><p class="eyebrow">Marketplace controls</p><h1>Admin</h1><p>Manage member access and review listed lots.</p></div></div>
+<section class="admin-section"><div class="section-head"><div><p class="eyebrow">Community</p><h2>Users</h2></div></div>
+<ul class="data-list">{% for user in users %}<li><span><strong>{{ user['email'] }}</strong><br><span class="status-text">{{ 'Blocked' if user['is_blocked'] else 'Active' }}</span></span><form class="inline" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="user_id" value="{{ user['id'] }}"><button name="action" value="{{ 'unblock' if user['is_blocked'] else 'block' }}">{{ 'Unblock' if user['is_blocked'] else 'Block user' }}</button></form></li>{% endfor %}</ul>
+</section>
+<section class="admin-section"><div class="section-head"><div><p class="eyebrow">Marketplace</p><h2>Lots</h2></div></div>
+<ul class="data-list">{% for lot in lots %}<li><span><strong>{{ lot['title'] }}</strong><br><span class="status-text">{{ lot['status'] }}</span></span><form class="inline" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="lot_id" value="{{ lot['id'] }}"><button name="action" value="delete_lot">Delete lot</button></form></li>{% endfor %}</ul>
+</section>{% endblock %}

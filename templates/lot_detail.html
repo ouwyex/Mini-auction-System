@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ lot['title'] }} | Mini Auction{% endblock %}
+{% block content %}
+<div class="lot-detail">
+  <div class="detail-art" aria-hidden="true"><span>{{ lot['title'][:1] }}</span></div>
+  <section class="detail-copy">
+    <span class="tag">{{ lot['status'] }} auction</span>
+    <h1>{{ lot['title'] }}</h1>
+    <p class="detail-description">{{ lot['description'] }}</p>
+    <div class="detail-meta"><span>Seller · {{ lot['seller_email'] }}</span><span>Closes · {{ lot['closes_at'] }} UTC</span></div>
+    <div class="detail-price"><span class="price-label">Current bid</span><strong class="price">{{ "%.2f"|format(lot['current_price']) }}</strong></div>
+    {% if lot['status'] in ('closed', 'unsold') %}
+      {% if winner %}<p>Winner: <strong>{{ winner }}</strong> · Final price <strong>{{ "%.2f"|format(lot['current_price']) }}</strong></p>
+      {% else %}<p>This lot closed without bids.</p>{% endif %}
+    {% endif %}
+    {% if current_user and current_user['role'] == 'user' and lot['status'] == 'active' and lot['seller_id'] != current_user['id'] %}
+    <form method="post" action="{{ url_for('place_bid', lot_id=lot['id']) }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Your bid <input type="number" name="amount" min="0.01" step="0.01" required></label>
+      <button type="submit">Place your bid <span aria-hidden="true">↗</span></button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+<section class="admin-section"><div class="section-head"><div><p class="eyebrow">The action so far</p><h2>Bid history</h2></div></div>
+{% if bids %}<ul class="data-list">{% for bid in bids %}<li><span><strong>{{ "%.2f"|format(bid['amount']) }}</strong> by {{ bid['bidder_email'] }}</span><span class="status-text">{{ bid['created_at'] }}</span></li>{% endfor %}</ul>
+{% else %}<div class="empty-state">No bids yet. Be the first to make a move.</div>{% endif %}
+</section>
+{% endblock %}
