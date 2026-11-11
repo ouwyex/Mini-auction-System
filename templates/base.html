@@ -12,7 +12,7 @@
     <nav>
       <a href="{{ url_for('home') }}">Lots</a>
       {% if current_user %}
-        {% if current_user['role'] == 'user' %}<a href="{{ url_for('my_lots') }}">My lots</a><a href="{{ url_for('create_lot') }}">Create lot</a><a href="{{ url_for('my_bids') }}">My bids</a>{% endif %}
+        {% if current_user['role'] == 'user' %}<a href="{{ url_for('my_lots') }}">My lots</a><a href="{{ url_for('create_lot') }}">Create lot</a><a href="{{ url_for('my_bids') }}">My bids</a><a href="{{ url_for('wallet') }}">Wallet · {{ "%.2f"|format(current_user['balance']) }}</a>{% endif %}
         {% if current_user['role'] == 'admin' %}<a href="{{ url_for('admin') }}">Admin</a>{% endif %}
         <span class="account-label">{{ current_user['email'] }}</span>
         <form class="inline" method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Log out</button></form>

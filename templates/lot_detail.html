@@ -13,7 +13,25 @@
       {% if winner %}<p>Winner: <strong>{{ winner }}</strong> · Final price <strong>{{ "%.2f"|format(lot['current_price']) }}</strong></p>
       {% else %}<p>This lot closed without bids.</p>{% endif %}
     {% endif %}
-    {% if current_user and current_user['role'] == 'user' and lot['status'] == 'active' and lot['seller_id'] != current_user['id'] %}
+    {% set can_bid = current_user and current_user['role'] == 'user' and lot['status'] == 'active' and lot['seller_id'] != current_user['id'] %}
+    {% if lot['status'] == 'active' or my_deposit %}
+    <div class="deposit-box">
+      <span class="price-label">Deposit</span>
+      <strong>{{ "%.2f"|format(deposit_required) }}</strong>
+      <span class="status-text">10% of the start price. It is held until the auction ends.</span>
+      {% if my_deposit and my_deposit['status'] == 'held' %}<p class="deposit-state ok">Your deposit of {{ "%.2f"|format(my_deposit['amount']) }} is held. You can bid.</p>
+      {% elif my_deposit and my_deposit['status'] == 'applied' %}<p class="deposit-state ok">Your deposit was applied to your purchase.</p>
+      {% elif my_deposit and my_deposit['status'] == 'returned' %}<p class="deposit-state">Your deposit was returned to your wallet.</p>
+      {% elif can_bid %}
+        <form method="post" action="{{ url_for('pay_deposit', lot_id=lot['id']) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit">Pay deposit {{ "%.2f"|format(deposit_required) }}</button>
+        </form>
+        <span class="status-text">Wallet balance: {{ "%.2f"|format(balance) }} · <a href="{{ url_for('wallet') }}">Add money</a></span>
+      {% elif lot['status'] == 'active' and not current_user %}<p class="deposit-state">Log in to pay the deposit and bid.</p>{% endif %}
+    </div>
+    {% endif %}
+    {% if can_bid and my_deposit and my_deposit['status'] == 'held' %}
     <form method="post" action="{{ url_for('place_bid', lot_id=lot['id']) }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>Your bid <input type="number" name="amount" min="0.01" step="0.01" required></label>

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Wallet | Mini Auction{% endblock %}
+{% block content %}<div class="page-heading"><div><p class="eyebrow">Your money</p><h1>Wallet</h1><p>Play money for this demo. A deposit is taken from your balance before you can bid on a lot.</p></div></div>
+<div class="wallet-summary">
+  <div><span class="price-label">Available balance</span><strong class="price">{{ "%.2f"|format(balance) }}</strong></div>
+  <div><span class="price-label">Held in deposits</span><strong class="price">{{ "%.2f"|format(held_total) }}</strong></div>
+</div>
+<form method="post" action="{{ url_for('top_up') }}" class="form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>Add money (demo, up to {{ max_top_up }}) <input type="number" name="amount" min="0.01" max="{{ max_top_up }}" step="0.01" required></label>
+  <button type="submit">Add to wallet</button>
+</form>
+<section class="admin-section"><div class="section-head"><div><p class="eyebrow">Guarantees</p><h2>My deposits</h2></div></div>
+{% if deposits %}<ul class="data-list">{% for deposit in deposits %}<li><span><a href="{{ url_for('lot_detail', lot_id=deposit['lot_id']) }}">{{ deposit['title'] }}</a><br><span class="status-text">Deposit · {{ "%.2f"|format(deposit['amount']) }}</span></span><span class="tag">{{ {'held': 'Held', 'returned': 'Returned', 'applied': 'Applied to purchase'}[deposit['status']] }}</span></li>{% endfor %}</ul>
+{% else %}<div class="empty-state">You have not paid any deposits yet. Open a lot to pay its deposit.</div>{% endif %}
+</section>{% endblock %}

@@ -21,6 +21,19 @@ def init_db():
         connection.executescript(schema)
 
 
+def ensure_deposit_support(connection):
+    """Upgrade an older database: add users.balance and the deposits table if they are missing."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
+    if columns and "balance" not in columns:
+        connection.execute("ALTER TABLE users ADD COLUMN balance REAL NOT NULL DEFAULT 0")
+        connection.commit()
+    has_deposits = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'deposits'"
+    ).fetchone()
+    if not has_deposits:
+        connection.executescript((BASE_DIR / "schema.sql").read_text(encoding="utf-8-sig"))
+
+
 if __name__ == "__main__":
     init_db()
     print(f"Database ready: {DATABASE}")
