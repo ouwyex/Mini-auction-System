@@ -1,7 +1,7 @@
 """Safely migrate existing auction databases to the unified user role."""
 import sqlite3
 
-from db import BASE_DIR, DATABASE
+from db import BASE_DIR, DATABASE, ensure_deposit_support
 
 
 def migrate(database_path=DATABASE):
@@ -38,6 +38,7 @@ def migrate(database_path=DATABASE):
     connection = sqlite3.connect(database_path)
     try:
         connection.executescript((BASE_DIR / "schema.sql").read_text(encoding="utf-8-sig"))
+        ensure_deposit_support(connection)
     finally:
         connection.close()
     print("Database migration complete; existing accounts and auction data were preserved.")

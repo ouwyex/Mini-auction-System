@@ -4,7 +4,7 @@ import sqlite3
 
 from werkzeug.security import generate_password_hash
 
-from db import BASE_DIR, DATABASE
+from db import BASE_DIR, DATABASE, ensure_deposit_support
 
 
 def seed(database_path=DATABASE):
@@ -12,7 +12,9 @@ def seed(database_path=DATABASE):
     connection.execute("PRAGMA foreign_keys = ON")
     schema = (BASE_DIR / "schema.sql").read_text(encoding="utf-8-sig")
     connection.executescript(schema)
+    ensure_deposit_support(connection)
     # Seed data is resettable demo content; this is not used by the migration.
+    connection.execute("DELETE FROM deposits")
     connection.execute("DELETE FROM bids")
     connection.execute("DELETE FROM lots")
     connection.execute("DELETE FROM users")
@@ -22,8 +24,8 @@ def seed(database_path=DATABASE):
     ids = {}
     for email, password, role in accounts:
         cursor = connection.execute(
-            "INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)",
-            (email, generate_password_hash(password), role),
+            "INSERT INTO users (email, password_hash, role, balance) VALUES (?, ?, ?, ?)",
+            (email, generate_password_hash(password), role, 1000 if role == "user" else 0),
         )
         ids[email] = cursor.lastrowid
 
@@ -54,9 +56,16 @@ def seed(database_path=DATABASE):
             (lot_ids[lot_index], ids[f"user{bidder_num}@example.com"], amount),
         )
         connection.execute("UPDATE lots SET current_price = ? WHERE id = ?", (amount, lot_ids[lot_index]))
+    # Every demo bidder already paid the 10% deposit for the lots they bid on.
+    for lot_index, bidder_num in sorted({(lot_index, bidder_num) for lot_index, bidder_num, _ in bid_rows}):
+        deposit = round(sample_lots[lot_index][2] * 0.10, 2)
+        bidder_id = ids[f"user{bidder_num}@example.com"]
+        connection.execute("INSERT INTO deposits (lot_id, user_id, amount) VALUES (?, ?, ?)",
+                           (lot_ids[lot_index], bidder_id, deposit))
+        connection.execute("UPDATE users SET balance = ROUND(balance - ?, 2) WHERE id = ?", (deposit, bidder_id))
     connection.commit()
     connection.close()
-    print("Seeded 1 admin, 4 users, 6 lots, and 4 bids.")
+    print("Seeded 1 admin, 4 users, 6 lots, 4 bids, and 4 deposits.")
     print("Demo passwords: admin-demo and user-demo.")
 
 
