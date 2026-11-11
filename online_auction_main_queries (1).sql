@@ -1,289 +1,182 @@
 -- ONLINE MINI-AUCTION SYSTEM
 
--- 1. SNIPING PROTECTION
 
+PRAGMA foreign_keys = ON;
+
+-- 1. Extend auction time when a bid is placed in the last 30 seconds
 DROP TRIGGER IF EXISTS extend_auction_on_last_second_bid;
 
 CREATE TRIGGER extend_auction_on_last_second_bid
 AFTER INSERT ON bids
 FOR EACH ROW
 BEGIN
-
     UPDATE lots
-
     SET closes_at = strftime(
         '%Y-%m-%dT%H:%M:%f+00:00',
         julianday(closes_at) + (2.0 / 1440.0)
     )
-
     WHERE id = NEW.lot_id
-
       AND status = 'active'
-
-      -- The bid must not be after the original closing time.
-      AND julianday(closes_at) >= julianday(NEW.created_at)
-
-      -- The bid must be within the final 30 seconds.
-      AND julianday(closes_at) - julianday(NEW.created_at)
-          <= (30.0 / 86400.0);
-
+      AND julianday(NEW.created_at) <= julianday(closes_at)
+      AND julianday(NEW.created_at) >= julianday(closes_at, '-30 seconds');
 END;
 
--- 2. DATABASE INDEXES
-
--- Speed up bid history and highest bid queries.
-CREATE INDEX IF NOT EXISTS idx_bids_lot_amount
+-- 2. Create indexes
+CREATE INDEX IF NOT EXISTS idx_bids_lot_amount_id
 ON bids (lot_id, amount DESC, id ASC);
 
--- Speed up user bid history.
 CREATE INDEX IF NOT EXISTS idx_bids_bidder
 ON bids (bidder_id);
 
--- Speed up recent bid queries.
 CREATE INDEX IF NOT EXISTS idx_bids_created_at
 ON bids (created_at);
 
--- Speed up active auction queries.
 CREATE INDEX IF NOT EXISTS idx_lots_status_closes
 ON lots (status, closes_at);
 
--- Speed up seller lot queries.
 CREATE INDEX IF NOT EXISTS idx_lots_seller
 ON lots (seller_id);
 
--- 3. HIGHEST BID FOR EACH LOT
-
+-- 3. Get the highest bid for each lot
 SELECT
     l.id AS lot_id,
     l.title,
-    l.start_price,
-    l.current_price,
     COALESCE(MAX(b.amount), l.start_price) AS highest_bid
-
-FROM lots AS l
-
-LEFT JOIN bids AS b
-    ON l.id = b.lot_id
-
-GROUP BY
-    l.id,
-    l.title,
-    l.start_price,
-    l.current_price
-
+FROM lots l
+LEFT JOIN bids b ON b.lot_id = l.id
+GROUP BY l.id, l.title, l.start_price
 ORDER BY l.id;
 
--- 4. TOTAL NUMBER OF BIDS FOR EACH LOT
-
+-- 4. Count bids for each lot
 SELECT
     l.id AS lot_id,
     l.title,
-    COUNT(b.id) AS total_bids,
-    COALESCE(MAX(b.amount), l.start_price) AS highest_bid
-
-FROM lots AS l
-
-LEFT JOIN bids AS b
-    ON l.id = b.lot_id
-
-GROUP BY
-    l.id,
-    l.title,
-    l.start_price
-
+    COUNT(b.id) AS total_bids
+FROM lots l
+LEFT JOIN bids b ON b.lot_id = l.id
+GROUP BY l.id, l.title
 ORDER BY total_bids DESC;
 
--- 5. REGISTERED USERS
-
+-- 5. Get all registered users
 SELECT
     id,
     first_name,
     last_name,
     email,
-    role,
-    balance
-
+    created_at
 FROM users
-
 WHERE role = 'user'
+ORDER BY created_at DESC;
 
-ORDER BY id;
-
--- 6. SELLERS
-
+-- 6. Get all sellers
 SELECT DISTINCT
     u.id,
     u.first_name,
     u.last_name,
     u.email
-
-FROM users AS u
-
-JOIN lots AS l
-    ON u.id = l.seller_id
-
+FROM users u
+JOIN lots l ON l.seller_id = u.id
 ORDER BY u.id;
 
--- 7. ADMINISTRATORS
-
+-- 7. Get all administrators
 SELECT
     id,
     first_name,
     last_name,
-    email,
-    role
-
+    email
 FROM users
+WHERE role = 'admin'
+ORDER BY id;
 
-WHERE role = 'admin';
-
--- 8. COMPLETE BID HISTORY FOR A LOT
-
+-- 8. Get complete bid history for a specific lot
 SELECT
     b.id AS bid_id,
-    l.id AS lot_id,
-    l.title AS lot_title,
+    b.lot_id,
+    b.bidder_id,
     u.first_name,
     u.last_name,
     b.amount,
     b.created_at
-
-FROM bids AS b
-
-JOIN lots AS l
-    ON b.lot_id = l.id
-
-JOIN users AS u
-    ON b.bidder_id = u.id
-
+FROM bids b
+JOIN users u ON u.id = b.bidder_id
 WHERE b.lot_id = 1
+ORDER BY b.created_at ASC, b.id ASC;
 
-ORDER BY b.amount DESC, b.id ASC;
-
-
--- 9. RECENT BIDS
--- Bids placed during the last 5 minutes.
--- This is an activity report, NOT the sniping rule.
-
+-- 9. Get bids placed during the last five minutes
 SELECT
     b.id AS bid_id,
-    l.title AS lot_title,
-    u.first_name,
-    u.last_name,
+    b.lot_id,
+    b.bidder_id,
     b.amount,
     b.created_at
+FROM bids b
+WHERE datetime(b.created_at) >= datetime('now', '-5 minutes')
+ORDER BY b.created_at DESC, b.id DESC;
 
-FROM bids AS b
-
-JOIN lots AS l
-    ON b.lot_id = l.id
-
-JOIN users AS u
-    ON b.bidder_id = u.id
-
-WHERE datetime(b.created_at)
-      >= datetime('now', '-5 minutes')
-
-ORDER BY b.created_at DESC;
-
-
--- 10. ACTIVE AUCTIONS
-
+-- 10. Get active auctions that have not expired
 SELECT
-    id AS lot_id,
+    id,
     title,
     start_price,
     current_price,
     bid_step,
     closes_at
-
 FROM lots
-
 WHERE status = 'active'
-
-AND datetime(closes_at) > datetime('now')
-
+  AND datetime(closes_at) > datetime('now')
 ORDER BY closes_at ASC;
 
--- 11. HIGHEST BID FOR A SPECIFIC LOT
-
+-- 11. Get the highest bid for a specific lot
 SELECT
-    l.id AS lot_id,
-    l.title,
+    b.id AS bid_id,
+    b.lot_id,
     b.bidder_id,
     u.first_name,
     u.last_name,
-    b.amount AS highest_bid,
+    b.amount,
     b.created_at
-
-FROM lots AS l
-
-JOIN bids AS b
-    ON b.lot_id = l.id
-
-JOIN users AS u
-    ON u.id = b.bidder_id
-
-WHERE l.id = 1
-
+FROM bids b
+JOIN users u ON u.id = b.bidder_id
+WHERE b.lot_id = 1
 ORDER BY b.amount DESC, b.id ASC
-
 LIMIT 1;
 
--- 12. AUCTION WINNERS
--- Highest accepted bid wins
-
+-- 12. Get winners of closed auctions
 SELECT
     l.id AS lot_id,
     l.title,
+    u.id AS winner_id,
     u.first_name,
     u.last_name,
-    u.email AS winner_email,
     b.amount AS winning_bid,
-    b.created_at AS winning_time
-
-FROM lots AS l
-
-JOIN bids AS b
-    ON b.lot_id = l.id
-
-JOIN users AS u
-    ON u.id = b.bidder_id
-
+    b.created_at AS winning_bid_time
+FROM lots l
+JOIN bids b ON b.lot_id = l.id
+JOIN users u ON u.id = b.bidder_id
 WHERE l.status = 'closed'
-
-AND b.id = (
-    SELECT b2.id
-
-    FROM bids AS b2
-
-    WHERE b2.lot_id = l.id
-
-    ORDER BY b2.amount DESC, b2.id ASC
-
-    LIMIT 1
-)
-
+  AND NOT EXISTS (
+      SELECT 1
+      FROM bids b2
+      WHERE b2.lot_id = l.id
+        AND (
+            b2.amount > b.amount
+            OR (b2.amount = b.amount AND b2.id < b.id)
+        )
+  )
 ORDER BY l.id;
 
--- 13. DEPOSIT HISTORY
-
-
+-- 13. Get deposit history
 SELECT
     d.id AS deposit_id,
-    l.title AS lot_title,
+    d.lot_id,
+    l.title,
+    d.user_id,
     u.first_name,
     u.last_name,
     d.amount,
     d.status,
     d.created_at
-
-FROM deposits AS d
-
-JOIN lots AS l
-    ON d.lot_id = l.id
-
-JOIN users AS u
-    ON d.user_id = u.id
-
-ORDER BY d.created_at DESC;
+FROM deposits d
+JOIN lots l ON l.id = d.lot_id
+JOIN users u ON u.id = d.user_id
+ORDER BY d.created_at DESC, d.id DESC;
