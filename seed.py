@@ -4,17 +4,18 @@ import sqlite3
 
 from werkzeug.security import generate_password_hash
 
-from db import BASE_DIR, DATABASE, ensure_deposit_support
+import wallet
+from db import DATABASE, ensure_schema
 
 
 def seed(database_path=DATABASE):
     connection = sqlite3.connect(database_path)
+    connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    schema = (BASE_DIR / "schema.sql").read_text(encoding="utf-8-sig")
-    connection.executescript(schema)
-    ensure_deposit_support(connection)
+    ensure_schema(connection)
     # Seed data is resettable demo content; this is not used by the migration.
     connection.execute("DELETE FROM deposits")
+    connection.execute("DELETE FROM wallet_transactions")
     connection.execute("DELETE FROM bids")
     connection.execute("DELETE FROM lots")
     connection.execute("DELETE FROM users")
@@ -24,10 +25,12 @@ def seed(database_path=DATABASE):
     ids = {}
     for email, password, role in accounts:
         cursor = connection.execute(
-            "INSERT INTO users (email, password_hash, role, balance) VALUES (?, ?, ?, ?)",
-            (email, generate_password_hash(password), role, 1000 if role == "user" else 0),
+            "INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)",
+            (email, generate_password_hash(password), role),
         )
         ids[email] = cursor.lastrowid
+        if role == "user":
+            wallet.top_up(connection, cursor.lastrowid, 500)
 
     now = datetime.now(timezone.utc)
     sample_lots = [
@@ -49,23 +52,19 @@ def seed(database_path=DATABASE):
         lot_ids.append(cursor.lastrowid)
 
     # One active lot with bids, one expired lot with bids, and one expired unsold lot.
-    bid_rows = [(0, 2, 50), (0, 3, 55), (3, 1, 27.5), (3, 2, 30)]
+    # Every bidder pays the lot's deposit first, exactly like a real user would.
+    bid_rows = [(0, 2, 50), (0, 3, 55), (3, 1, 27.5), (3, 3, 30)]
     for lot_index, bidder_num, amount in bid_rows:
-        connection.execute(
-            "INSERT INTO bids (lot_id, bidder_id, amount) VALUES (?, ?, ?)",
-            (lot_ids[lot_index], ids[f"user{bidder_num}@example.com"], amount),
-        )
-        connection.execute("UPDATE lots SET current_price = ? WHERE id = ?", (amount, lot_ids[lot_index]))
-    # Every demo bidder already paid the 10% deposit for the lots they bid on.
-    for lot_index, bidder_num in sorted({(lot_index, bidder_num) for lot_index, bidder_num, _ in bid_rows}):
-        deposit = round(sample_lots[lot_index][2] * 0.10, 2)
+        lot_id = lot_ids[lot_index]
         bidder_id = ids[f"user{bidder_num}@example.com"]
-        connection.execute("INSERT INTO deposits (lot_id, user_id, amount) VALUES (?, ?, ?)",
-                           (lot_ids[lot_index], bidder_id, deposit))
-        connection.execute("UPDATE users SET balance = ROUND(balance - ?, 2) WHERE id = ?", (deposit, bidder_id))
+        if not connection.execute("SELECT 1 FROM deposits WHERE lot_id = ? AND user_id = ?", (lot_id, bidder_id)).fetchone():
+            lot = connection.execute("SELECT id, title, start_price FROM lots WHERE id = ?", (lot_id,)).fetchone()
+            wallet.pay_deposit(connection, bidder_id, lot)
+        connection.execute("INSERT INTO bids (lot_id, bidder_id, amount) VALUES (?, ?, ?)", (lot_id, bidder_id, amount))
+        connection.execute("UPDATE lots SET current_price = ? WHERE id = ?", (amount, lot_id))
     connection.commit()
     connection.close()
-    print("Seeded 1 admin, 4 users, 6 lots, 4 bids, and 4 deposits.")
+    print("Seeded 1 admin, 4 users (500.00 wallet top-up each), 6 lots, 4 bids, and 4 deposits.")
     print("Demo passwords: admin-demo and user-demo.")
 
 

@@ -9,15 +9,16 @@ import math
 from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from db import DATABASE, ensure_deposit_support, init_db
+import wallet
+from db import DATABASE, ensure_schema, init_db
 
 app = Flask(__name__)
+# Databases that already went through ensure_schema in this process.
+_checked_databases = set()
+
+LOT_STATUSES = ("active", "closed", "unsold")
 app.config["SECRET_KEY"] = "change-this-development-key"
 app.config["DATABASE"] = str(DATABASE)
-
-DEPOSIT_RATE = 0.10    # a user must pay 10% of the start price before bidding on a lot
-MAX_TOP_UP = 10000     # demo wallet: the largest amount that can be added at once
-_upgraded_databases = set()
 
 
 def get_db():
@@ -36,52 +37,36 @@ def close_db(_error=None):
         connection.close()
 
 
-def deposit_amount(lot):
-    """The deposit for a lot: 10% of its start price (at least 0.01), rounded to cents."""
-    return round(max(lot["start_price"] * DEPOSIT_RATE, 0.01), 2)
-
-
-def settle_lot_deposits(database, lot_id, winner_id):
-    """Auction ended: the winner's deposit is applied, every other deposit goes back to the wallet."""
-    held = database.execute(
-        "SELECT id, user_id, amount FROM deposits WHERE lot_id = ? AND status = 'held'", (lot_id,)
-    ).fetchall()
-    for deposit in held:
-        if winner_id is not None and deposit["user_id"] == winner_id:
-            database.execute("UPDATE deposits SET status = 'applied' WHERE id = ?", (deposit["id"],))
-        else:
-            database.execute("UPDATE users SET balance = ROUND(balance + ?, 2) WHERE id = ?",
-                             (deposit["amount"], deposit["user_id"]))
-            database.execute("UPDATE deposits SET status = 'returned' WHERE id = ?", (deposit["id"],))
-
-
-def refund_lot_deposits(database, lot_id):
-    """The lot is removed: give back every held or applied deposit, then delete the deposit rows."""
-    rows = database.execute(
-        "SELECT user_id, amount FROM deposits WHERE lot_id = ? AND status IN ('held', 'applied')", (lot_id,)
-    ).fetchall()
-    for deposit in rows:
-        database.execute("UPDATE users SET balance = ROUND(balance + ?, 2) WHERE id = ?",
-                         (deposit["amount"], deposit["user_id"]))
-    database.execute("DELETE FROM deposits WHERE lot_id = ?", (lot_id,))
+def winning_bid(database, lot_id):
+    """Highest bid on a lot; ties go to the earlier bid. None if there are no bids."""
+    return database.execute(
+        "SELECT id, bidder_id, amount FROM bids WHERE lot_id = ? ORDER BY amount DESC, id ASC LIMIT 1",
+        (lot_id,),
+    ).fetchone()
 
 
 def close_expired_lots(database):
-    """Close expired lots; the highest bid wins, ties go to the earlier bid. Deposits are settled too."""
+    """Close expired lots and settle their deposits; the highest bid wins, ties go to the earlier bid."""
     now = datetime.now(timezone.utc).isoformat()
-    if not database.execute("SELECT 1 FROM lots WHERE status = 'active' AND closes_at <= ? LIMIT 1", (now,)).fetchone():
+    expired = database.execute(
+        "SELECT id FROM lots WHERE status = 'active' AND closes_at <= ?", (now,)
+    ).fetchall()
+    if not expired:
         return
     try:
         database.execute("BEGIN IMMEDIATE")
-        due = database.execute("SELECT id FROM lots WHERE status = 'active' AND closes_at <= ?", (now,)).fetchall()
-        for lot in due:
-            top = database.execute(
-                "SELECT bidder_id FROM bids WHERE lot_id = ? ORDER BY amount DESC, id ASC LIMIT 1", (lot["id"],)
-            ).fetchone()
-            database.execute("UPDATE lots SET status = ? WHERE id = ?", ("closed" if top else "unsold", lot["id"]))
-            settle_lot_deposits(database, lot["id"], top["bidder_id"] if top else None)
+        for row in expired:
+            # Re-read inside the write lock: another request may have closed it already.
+            lot = database.execute("SELECT * FROM lots WHERE id = ? AND status = 'active'", (row["id"],)).fetchone()
+            if lot is None:
+                continue
+            top = winning_bid(database, lot["id"])
+            database.execute("UPDATE lots SET status = ? WHERE id = ?",
+                             ("closed" if top else "unsold", lot["id"]))
+            # The winner's deposit counts toward the purchase; all other deposits go back to their owners.
+            wallet.settle_lot(database, lot, top["bidder_id"] if top else None)
         database.commit()
-    except sqlite3.Error:
+    except Exception:
         database.rollback()
         raise
 
@@ -107,7 +92,19 @@ def admin_required(view):
     return wrapped
 
 
-def owned_lot_or_403(lot_id, allow_deposits=False):
+def user_required(view):
+    """Wallet and deposit pages belong to regular users; administrators have no wallet."""
+    @wraps(view)
+    @login_required
+    def wrapped(*args, **kwargs):
+        user = get_db().execute("SELECT role FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+        if not user or user["role"] != "user":
+            abort(403, description="Administrators do not have a wallet.")
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def owned_lot_or_403(lot_id):
     """Return the lot only to its owner; otherwise stop with a clear 403."""
     lot = get_db().execute("SELECT * FROM lots WHERE id = ?", (lot_id,)).fetchone()
     if lot is None:
@@ -116,8 +113,6 @@ def owned_lot_or_403(lot_id, allow_deposits=False):
         abort(403, description="You can only manage your own lots.")
     if get_db().execute("SELECT 1 FROM bids WHERE lot_id = ? LIMIT 1", (lot_id,)).fetchone():
         abort(403, description="A lot with bids cannot be edited or cancelled.")
-    if not allow_deposits and get_db().execute("SELECT 1 FROM deposits WHERE lot_id = ? LIMIT 1", (lot_id,)).fetchone():
-        abort(403, description="A lot with paid deposits cannot be edited. You can still cancel it and the deposits are returned.")
     return lot
 
 
@@ -125,15 +120,10 @@ def owned_lot_or_403(lot_id, allow_deposits=False):
 def prepare_request():
     if not Path(app.config["DATABASE"]).exists():
         init_db()
-    # Add profile columns to databases created by earlier versions.
-    user_columns = {row["name"] for row in get_db().execute("PRAGMA table_info(users)")}
-    for column in ("first_name", "last_name"):
-        if column not in user_columns:
-            get_db().execute(f"ALTER TABLE users ADD COLUMN {column} TEXT")
-    get_db().commit()
-    if app.config["DATABASE"] not in _upgraded_databases:
-        ensure_deposit_support(get_db())
-        _upgraded_databases.add(app.config["DATABASE"])
+    # Upgrade databases created by earlier versions (profile columns, balance, wallet table, indexes).
+    if app.config["DATABASE"] not in _checked_databases:
+        ensure_schema(get_db())
+        _checked_databases.add(app.config["DATABASE"])
     # Expiration is handled during requests, so no background worker is needed.
     close_expired_lots(get_db())
     if session.get("user_id"):
@@ -165,24 +155,82 @@ def forbidden(error):
     return render_template("error.html", code=403, message=error.description), 403
 
 
+def parse_price_filter(raw_value, label):
+    """Return (price, error). An empty box means no limit; bad input gives an error message."""
+    raw_value = (raw_value or "").strip()
+    if not raw_value:
+        return None, None
+    try:
+        price = float(raw_value)
+    except ValueError:
+        return None, f"{label} must be a number."
+    if not math.isfinite(price) or price < 0:
+        return None, f"{label} must be zero or more."
+    return price, None
+
+
+def like_pattern(text):
+    """Turn user text into a LIKE pattern that matches it literally (no % or _ wildcards)."""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 @app.route("/")
 def home():
-    lots = get_db().execute(
-        "SELECT id, title, current_price, closes_at FROM lots "
-        "WHERE status = 'active' ORDER BY closes_at, id"
-    ).fetchall()
+    # Filter values come from the query string; defaults keep the old "active lots" page.
+    status = request.args.get("status", "active").strip().lower()
+    query = request.args.get("q", "").strip()[:100]
+    min_price, min_error = parse_price_filter(request.args.get("min_price"), "Minimum price")
+    max_price, max_error = parse_price_filter(request.args.get("max_price"), "Maximum price")
+    if status != "all" and status not in LOT_STATUSES:
+        flash("Unknown status filter; showing active lots.", "error")
+        status = "active"
+    for error in (min_error, max_error):
+        if error:
+            flash(f"{error} That filter was ignored.", "error")
+    if min_price is not None and max_price is not None and min_price > max_price:
+        flash("Minimum price is higher than maximum price. The price filter was ignored.", "error")
+        min_price = max_price = None
+
+    sql = "SELECT id, title, current_price, closes_at, status FROM lots WHERE 1 = 1"
+    params = []
+    if status != "all":
+        sql += " AND status = ?"
+        params.append(status)
+    if min_price is not None:
+        sql += " AND current_price >= ?"
+        params.append(min_price)
+    if max_price is not None:
+        sql += " AND current_price <= ?"
+        params.append(max_price)
+    if query:
+        sql += " AND title LIKE ? ESCAPE '\\'"
+        params.append(like_pattern(query))
+    # Soonest-closing first for live auctions; most recently closed first otherwise.
+    sql += " ORDER BY closes_at, id" if status == "active" else " ORDER BY closes_at DESC, id DESC"
+    lots = get_db().execute(sql, params).fetchall()
+
     now = datetime.now(timezone.utc)
     lot_rows = []
     for lot in lots:
-        try:
-            seconds = max(0, int((datetime.fromisoformat(lot["closes_at"]) - now).total_seconds()))
-            days, remainder = divmod(seconds, 86400)
-            hours, remainder = divmod(remainder, 3600)
-            remaining = f"{days}d {hours}h" if days else f"{hours}h {remainder // 60}m"
-        except ValueError:
-            remaining = "time unavailable"
+        remaining = None
+        if lot["status"] == "active":
+            try:
+                seconds = max(0, int((datetime.fromisoformat(lot["closes_at"]) - now).total_seconds()))
+                days, remainder = divmod(seconds, 86400)
+                hours, remainder = divmod(remainder, 3600)
+                remaining = f"{days}d {hours}h" if days else f"{hours}h {remainder // 60}m"
+            except ValueError:
+                remaining = "time unavailable"
         lot_rows.append({"lot": lot, "remaining": remaining})
-    return render_template("home.html", lots=lot_rows)
+    filters = {
+        "status": status, "q": query,
+        "min_price": request.args.get("min_price", "").strip() if min_price is not None else "",
+        "max_price": request.args.get("max_price", "").strip() if max_price is not None else "",
+    }
+    is_filtered = status != "active" or bool(query) or min_price is not None or max_price is not None
+    return render_template("home.html", lots=lot_rows, filters=filters, statuses=LOT_STATUSES,
+                           is_filtered=is_filtered)
 
 
 @app.route("/register", methods=("GET", "POST"))
@@ -258,14 +306,12 @@ def lot_detail(lot_id):
         winner = database.execute("SELECT email FROM users WHERE id = ?", (database.execute(
             "SELECT bidder_id FROM bids WHERE lot_id = ? ORDER BY amount DESC, id ASC LIMIT 1", (lot_id,)
         ).fetchone()[0],)).fetchone()["email"]
-    my_deposit = balance = None
+    deposit = None
     if session.get("user_id"):
-        my_deposit = database.execute(
-            "SELECT * FROM deposits WHERE lot_id = ? AND user_id = ?", (lot_id, session["user_id"])
-        ).fetchone()
-        balance = database.execute("SELECT balance FROM users WHERE id = ?", (session["user_id"],)).fetchone()["balance"]
-    return render_template("lot_detail.html", lot=lot, bids=bids, winner=winner,
-                           deposit_required=deposit_amount(lot), my_deposit=my_deposit, balance=balance)
+        deposit = database.execute("SELECT status FROM deposits WHERE lot_id = ? AND user_id = ?",
+                                  (lot_id, session["user_id"])).fetchone()
+    return render_template("lot_detail.html", lot=lot, bids=bids, winner=winner, deposit=deposit,
+                           deposit_amount=wallet.deposit_amount(lot["start_price"]))
 
 
 def parse_closing_time(value):
@@ -316,6 +362,8 @@ def edit_lot(lot_id):
     lot = owned_lot_or_403(lot_id)
     if lot["status"] != "active":
         abort(403, description="Only active lots can be edited.")
+    if get_db().execute("SELECT 1 FROM deposits WHERE lot_id = ? LIMIT 1", (lot_id,)).fetchone():
+        abort(403, description="A lot with paid deposits cannot be edited.")
     if request.method == "POST":
         title = request.form.get("title", "").strip()
         description = request.form.get("description", "").strip()
@@ -345,61 +393,21 @@ def edit_lot(lot_id):
 @app.post("/lots/<int:lot_id>/cancel")
 @login_required
 def cancel_lot(lot_id):
-    lot = owned_lot_or_403(lot_id, allow_deposits=True)
+    lot = owned_lot_or_403(lot_id)
     if lot["status"] != "active":
         abort(403, description="Only active lots can be cancelled.")
     database = get_db()
     try:
         database.execute("BEGIN IMMEDIATE")
-        if database.execute("SELECT 1 FROM bids WHERE lot_id = ? LIMIT 1", (lot_id,)).fetchone():
-            raise ValueError("A lot with bids cannot be edited or cancelled.")
-        refund_lot_deposits(database, lot_id)
+        wallet.remove_lot_deposits(database, lot, "Lot cancelled")
         database.execute("DELETE FROM lots WHERE id = ? AND seller_id = ?", (lot_id, session["user_id"]))
         database.commit()
-        flash("Lot cancelled. Any deposits were returned to the users' wallets.", "success")
-    except ValueError as error:
-        database.rollback()
-        flash(str(error), "error")
-    return redirect(url_for("my_lots"))
-
-
-@app.post("/lots/<int:lot_id>/deposit")
-@login_required
-def pay_deposit(lot_id):
-    """Lock 10% of the start price from the wallet. Without it the user cannot bid on this lot."""
-    database = get_db()
-    try:
-        database.execute("BEGIN IMMEDIATE")
-        lot = database.execute("SELECT * FROM lots WHERE id = ?", (lot_id,)).fetchone()
-        user = database.execute("SELECT role FROM users WHERE id = ?", (session["user_id"],)).fetchone()
-        if not lot:
-            raise ValueError("This lot does not exist.")
-        if not user or user["role"] != "user":
-            raise ValueError("Only user accounts can pay deposits.")
-        if lot["status"] != "active" or datetime.fromisoformat(lot["closes_at"]) <= datetime.now(timezone.utc):
-            raise ValueError("This lot is not active.")
-        if lot["seller_id"] == session["user_id"]:
-            raise ValueError("You cannot pay a deposit on your own lot.")
-        if database.execute("SELECT 1 FROM deposits WHERE lot_id = ? AND user_id = ?", (lot_id, session["user_id"])).fetchone():
-            raise ValueError("You already paid the deposit for this lot.")
-        amount = deposit_amount(lot)
-        paid = database.execute(
-            "UPDATE users SET balance = ROUND(balance - ?, 2) WHERE id = ? AND ROUND(balance, 2) >= ?",
-            (amount, session["user_id"], amount),
-        )
-        if paid.rowcount == 0:
-            raise ValueError(f"Not enough balance. The deposit is {amount:.2f}; add money to your wallet first.")
-        database.execute("INSERT INTO deposits (lot_id, user_id, amount) VALUES (?, ?, ?)",
-                         (lot_id, session["user_id"], amount))
-        database.commit()
-        flash(f"Deposit of {amount:.2f} paid. You can now bid on this lot.", "success")
-    except ValueError as error:
-        database.rollback()
-        flash(str(error), "error")
     except sqlite3.Error:
         database.rollback()
-        flash("We could not take the deposit. Please try again.", "error")
-    return redirect(url_for("lot_detail", lot_id=lot_id))
+        flash("We could not cancel the lot. Please try again.", "error")
+        return redirect(url_for("my_lots"))
+    flash("Lot cancelled. Any deposits were returned.", "success")
+    return redirect(url_for("my_lots"))
 
 
 @app.post("/lots/<int:lot_id>/bid")
@@ -407,7 +415,8 @@ def pay_deposit(lot_id):
 def place_bid(lot_id):
     raw_amount = request.form.get("amount", "")
     try:
-        amount = float(raw_amount)
+        # Bids are whole cents so prices stay tidy.
+        amount = round(float(raw_amount), 2)
         if not math.isfinite(amount) or amount <= 0:
             raise ValueError
     except (TypeError, ValueError):
@@ -425,12 +434,11 @@ def place_bid(lot_id):
             raise ValueError("You cannot bid on your own lot.")
         if datetime.fromisoformat(lot["closes_at"]) <= datetime.now(timezone.utc):
             raise ValueError("Bidding has closed for this lot.")
-        if not database.execute(
-            "SELECT 1 FROM deposits WHERE lot_id = ? AND user_id = ? AND status = 'held'", (lot_id, session["user_id"])
-        ).fetchone():
-            raise ValueError(f"Pay the {deposit_amount(lot):.2f} deposit for this lot before you bid.")
-        has_bids = database.execute("SELECT 1 FROM bids WHERE lot_id = ? LIMIT 1", (lot_id,)).fetchone()
-        minimum = lot["current_price"] + lot["bid_step"] if has_bids else lot["start_price"]
+        if not database.execute("SELECT 1 FROM deposits WHERE lot_id = ? AND user_id = ? AND status = 'held'",
+                                (lot_id, session["user_id"])).fetchone():
+            raise ValueError(f"Pay the {wallet.deposit_amount(lot['start_price']):.2f} deposit before bidding on this lot.")
+        previous = winning_bid(database, lot_id)
+        minimum = lot["current_price"] + lot["bid_step"] if previous else lot["start_price"]
         if amount < minimum:
             raise ValueError(f"Bid must be at least {minimum:.2f}.")
         database.execute("INSERT INTO bids (lot_id, bidder_id, amount) VALUES (?, ?, ?)",
@@ -468,40 +476,67 @@ def my_bids():
 
 
 @app.route("/wallet")
-@login_required
-def wallet():
+@user_required
+def wallet_page():
     database = get_db()
-    user = database.execute("SELECT role, balance FROM users WHERE id = ?", (session["user_id"],)).fetchone()
-    if user["role"] != "user":
-        abort(403, description="Wallets are only available to user accounts.")
-    deposits = database.execute(
-        "SELECT deposits.*, lots.title FROM deposits JOIN lots ON lots.id = deposits.lot_id "
-        "WHERE deposits.user_id = ? ORDER BY deposits.id DESC", (session["user_id"],)
-    ).fetchall()
-    held_total = round(sum(row["amount"] for row in deposits if row["status"] == "held"), 2)
-    return render_template("wallet.html", balance=user["balance"], deposits=deposits,
-                           held_total=held_total, max_top_up=MAX_TOP_UP)
+    deposits, held_total = wallet.user_deposits(database, session["user_id"])
+    return render_template(
+        "wallet.html",
+        balance=wallet.get_balance(database, session["user_id"]),
+        held_total=held_total,
+        deposits=deposits,
+        transactions=wallet.history(database, session["user_id"]),
+        labels=wallet.LABELS,
+        max_top_up=wallet.MAX_TOP_UP,
+    )
 
 
 @app.post("/wallet/top-up")
-@login_required
+@user_required
 def top_up():
-    """Demo wallet: add play money so deposits can be paid. No real payment happens."""
     try:
         amount = round(float(request.form.get("amount", "")), 2)
-        if not math.isfinite(amount) or amount <= 0 or amount > MAX_TOP_UP:
-            raise ValueError
     except (TypeError, ValueError):
-        flash(f"Enter an amount greater than zero and at most {MAX_TOP_UP}.", "error")
-        return redirect(url_for("wallet"))
+        amount = 0
+    if not math.isfinite(amount) or amount <= 0 or amount > wallet.MAX_TOP_UP:
+        flash(f"Enter an amount greater than zero and at most {wallet.MAX_TOP_UP:.2f}.", "error")
+        return redirect(url_for("wallet_page"))
     database = get_db()
-    changed = database.execute("UPDATE users SET balance = ROUND(balance + ?, 2) WHERE id = ? AND role = 'user'",
-                               (amount, session["user_id"]))
-    database.commit()
-    if changed.rowcount == 0:
-        abort(403, description="Wallets are only available to user accounts.")
-    flash(f"{amount:.2f} was added to your wallet.", "success")
-    return redirect(url_for("wallet"))
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        balance = wallet.top_up(database, session["user_id"], amount)
+        database.commit()
+    except sqlite3.Error:
+        database.rollback()
+        flash("We could not update your wallet. Please try again.", "error")
+        return redirect(url_for("wallet_page"))
+    flash(f"Added {amount:.2f} to your wallet. New balance: {balance:.2f}.", "success")
+    return redirect(url_for("wallet_page"))
+
+
+@app.post("/lots/<int:lot_id>/deposit")
+@user_required
+def pay_deposit(lot_id):
+    database = get_db()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        lot = database.execute("SELECT * FROM lots WHERE id = ?", (lot_id,)).fetchone()
+        if not lot:
+            raise ValueError("This lot does not exist.")
+        if lot["status"] != "active" or datetime.fromisoformat(lot["closes_at"]) <= datetime.now(timezone.utc):
+            raise ValueError("This lot is not active.")
+        if lot["seller_id"] == session["user_id"]:
+            raise ValueError("You cannot pay a deposit on your own lot.")
+        amount = wallet.pay_deposit(database, session["user_id"], lot)
+        database.commit()
+        flash(f"Deposit of {amount:.2f} paid. You can now bid on this lot.", "success")
+    except ValueError as error:
+        database.rollback()
+        flash(str(error), "error")
+    except sqlite3.Error:
+        database.rollback()
+        flash("We could not take the deposit. Please try again.", "error")
+    return redirect(url_for("lot_detail", lot_id=lot_id))
 
 
 @app.route("/admin", methods=("GET", "POST"))
@@ -519,8 +554,10 @@ def admin():
                                  (1 if action == "block" else 0, user_id))
             elif action == "delete_lot":
                 lot_id = int(request.form.get("lot_id", ""))
-                database.execute("BEGIN IMMEDIATE")
-                refund_lot_deposits(database, lot_id)
+                lot = database.execute("SELECT id, title FROM lots WHERE id = ?", (lot_id,)).fetchone()
+                if lot:
+                    # Refund held deposits and clear deposit rows so the lot can be removed.
+                    wallet.remove_lot_deposits(database, lot, "Lot removed")
                 database.execute("DELETE FROM bids WHERE lot_id = ?", (lot_id,))
                 database.execute("DELETE FROM lots WHERE id = ?", (lot_id,))
             else:

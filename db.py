@@ -5,6 +5,13 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE = BASE_DIR / "auction.db"
 
+# Columns added after the first version; ensure_schema adds them to older databases.
+LATER_USER_COLUMNS = {
+    "first_name": "TEXT",
+    "last_name": "TEXT",
+    "balance": "REAL NOT NULL DEFAULT 0 CHECK (balance >= 0)",
+}
+
 
 def get_db():
     """Open a connection for the current request and enforce foreign keys."""
@@ -21,17 +28,25 @@ def init_db():
         connection.executescript(schema)
 
 
-def ensure_deposit_support(connection):
-    """Upgrade an older database: add users.balance and the deposits table if they are missing."""
-    columns = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
-    if columns and "balance" not in columns:
-        connection.execute("ALTER TABLE users ADD COLUMN balance REAL NOT NULL DEFAULT 0")
-        connection.commit()
-    has_deposits = connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'deposits'"
-    ).fetchone()
-    if not has_deposits:
-        connection.executescript((BASE_DIR / "schema.sql").read_text(encoding="utf-8-sig"))
+def ensure_schema(connection):
+    """Bring an older database up to date without touching its data.
+
+    Creates missing tables and indexes (deposits, wallet_transactions, filter index) and
+    adds the profile and balance columns to an existing users table.
+    """
+    # An interim version stored bid holds in wallet_transactions with different types.
+    # Keep that table as a backup instead of deleting it, then create the current one.
+    old = connection.execute("SELECT sql FROM sqlite_master WHERE name = 'wallet_transactions'").fetchone()
+    if old and "bid_hold" in old[0]:
+        connection.execute("DROP INDEX IF EXISTS idx_wallet_user")
+        connection.execute("DROP INDEX IF EXISTS idx_wallet_bid")
+        connection.execute("ALTER TABLE wallet_transactions RENAME TO wallet_transactions_old_backup")
+    connection.executescript((BASE_DIR / "schema.sql").read_text(encoding="utf-8-sig"))
+    existing = {row[1] for row in connection.execute("PRAGMA table_info(users)")}
+    for column, definition in LATER_USER_COLUMNS.items():
+        if column not in existing:
+            connection.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+    connection.commit()
 
 
 if __name__ == "__main__":

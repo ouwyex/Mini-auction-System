@@ -29,11 +29,11 @@ def post(client, url, data=None, **kwargs):
     return client.post(url, data={**(data or {}), "csrf_token": "test-token"}, **kwargs)
 
 
-def add_user(email, role="user", blocked=0):
+def add_user(email, role="user", blocked=0, balance=1000):
     with sqlite3.connect(flask_app.config["DATABASE"]) as connection:
         cursor = connection.execute(
-            "INSERT INTO users (email, password_hash, role, is_blocked) VALUES (?, ?, ?, ?)",
-            (email, generate_password_hash("password-123"), role, blocked),
+            "INSERT INTO users (email, password_hash, role, is_blocked, balance) VALUES (?, ?, ?, ?, ?)",
+            (email, generate_password_hash("password-123"), role, blocked, balance),
         )
         return cursor.lastrowid
 
@@ -67,12 +67,6 @@ def lot_id(title="Test lot", seller_id=None, closes=None):
         return cursor.lastrowid
 
 
-def give_deposit(lot, user, amount=1.0):
-    """Insert a held deposit directly, so tests about bidding do not repeat the payment step."""
-    with sqlite3.connect(flask_app.config["DATABASE"]) as connection:
-        connection.execute("INSERT INTO deposits (lot_id, user_id, amount) VALUES (?, ?, ?)", (lot, user, amount))
-
-
 def test_registration_creates_user_role_and_duplicate_email_is_rejected(client):
     response = post(client, "/register", {"first_name": "Alex", "last_name": "Smith", "email": "new@example.com", "password": "password-123", "role": "admin"})
     assert response.status_code == 302
@@ -104,9 +98,10 @@ def test_user_cannot_bid_on_own_lot_and_bid_step_is_enforced(client):
     own_lot = lot_id(seller_id=seller_id)
     assert b"own lot" in post(client, f"/lots/{own_lot}/bid", {"amount": "10"}, follow_redirects=True).data
     bidder = add_user("bidder@example.com")
-    give_deposit(own_lot, bidder)  # bidding now requires a paid deposit
     with client.session_transaction() as sess:
         sess["user_id"] = bidder
+    assert b"Pay the 1.00 deposit" in post(client, f"/lots/{own_lot}/bid", {"amount": "10"}, follow_redirects=True).data
+    post(client, f"/lots/{own_lot}/deposit")  # bidding needs a paid deposit (10% of the start price)
     assert b"at least 10.00" in post(client, f"/lots/{own_lot}/bid", {"amount": "9"}, follow_redirects=True).data
     response = post(client, f"/lots/{own_lot}/bid", {"amount": "12"})
     assert response.status_code == 302
