@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Notifications | Mini Auction{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <div>
+    <p class="eyebrow">Your account</p>
+    <h1>Notifications</h1>
+    <p>Updates about your bids and auctions.</p>
+  </div>
+  {% if notifications %}
+  <form method="post" action="{{ url_for('mark_all_notifications_read') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Mark all as read</button>
+  </form>
+  {% endif %}
+</section>
+
+{% if notifications %}
+<ul class="data-list">
+  {% for item in notifications %}
+  <li class="{% if not item['is_read'] %}notification-unread{% endif %}">
+    <span>
+      <strong>{{ item['message'] }}</strong>
+      {% if item['lot_id'] %}
+        <br><a href="{{ url_for('lot_detail', lot_id=item['lot_id']) }}">{{ item['lot_title'] or 'View auction' }}</a>
+      {% endif %}
+      <br><span class="status-text">{{ item['created_at'] }} · {{ 'Read' if item['is_read'] else 'Unread' }}</span>
+    </span>
+    {% if not item['is_read'] %}
+    <form method="post" action="{{ url_for('mark_notification_read', notification_id=item['id']) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit">Mark read</button>
+    </form>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="empty-state">You have no notifications yet.</div>
+{% endif %}
+{% endblock %}
