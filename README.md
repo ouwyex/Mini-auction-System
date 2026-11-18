@@ -35,6 +35,7 @@ Blocked accounts cannot log in or continue using an existing session. Registrati
 - The first bid must be at least the start price. Each later bid must be at least the current price plus the bid step.
 - Sellers cannot bid on their own lots. Bids are checked and recorded in one `BEGIN IMMEDIATE` SQLite transaction.
 - Expired lots are closed during requests. The highest bid wins; if bids tie, the earlier inserted bid wins. A lot without bids becomes unsold.
+- Soft close: a bid placed in the last 30 seconds before closing extends the auction by 2 minutes.
 - Datetime-local values are interpreted as UTC. There is no background worker, so an expired lot's displayed status updates on the next request.
 
 ## Home page filter
@@ -66,6 +67,10 @@ Every user has a demo wallet balance (top-ups are simulated, 0.01 to 10000.00 at
 - Amounts are stored as `REAL` rounded to cents, which is fine for this demo; a real system would use integer cents.
 - Deposits created before the history table existed have no `deposit_paid` row, but their refunds are still recorded.
 
+## Notifications
+
+When a bid takes the lead, the previous highest bidder gets an in-app notification (`notifications` table, `notifications.py`). The Notifications link in the menu shows the unread count; the page lists messages and lets the user mark one or all as read (`/notifications`). Raising your own leading bid does not notify you, and a user can only mark their own notifications as read. The notification is stored in the same transaction as the bid, so both succeed or both roll back. There is no email, SMS, or background worker; the user sees it on the next page load.
+
 ## Test
 
 ```powershell
@@ -75,11 +80,12 @@ python -m pytest
 ## Project structure
 
 - `app.py` — routes, access checks, CSRF checks, the home page filter, wallet pages, and auction actions.
+- `notifications.py` — in-app notification helpers (outbid alerts, unread count, mark as read).
 - `wallet.py` — wallet helpers: top-ups, deposits, deposit settlement, and wallet history.
 - `db.py` / `schema.sql` — SQLite connection helper, table and index definitions, and `ensure_schema` for upgrading older databases.
 - `migrate.py` — preserves existing data while converting old account roles and adding the wallet tables.
 - `seed.py` — creates one admin, four funded users, six demo lots, and bids backed by paid deposits.
 - `templates/` — Jinja pages; template autoescaping protects displayed content.
-- `tests/` — pytest coverage for roles, permissions, bidding, closing (`test_app.py`), the filter (`test_filter.py`), and wallet history (`test_wallet.py`), and the deposit rule (`test_deposits.py`).
+- `tests/` — pytest coverage for roles, permissions, bidding, closing (`test_app.py`), the filter (`test_filter.py`), wallet history (`test_wallet.py`), the deposit rule (`test_deposits.py`), notifications (`test_notifications.py`), the 30-second soft close (`test_soft_close.py`), and the team's QA requirements (`test_qa_requirements.py`).
 
 The Flask development secret key is for local use only; deployment should set a private secret key from the environment.

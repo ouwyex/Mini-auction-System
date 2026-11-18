@@ -14,6 +14,7 @@
       {% if current_user %}
         {% if current_user['role'] == 'user' %}<a href="{{ url_for('my_lots') }}">My lots</a><a href="{{ url_for('create_lot') }}">Create lot</a><a href="{{ url_for('my_bids') }}">My bids</a><a href="{{ url_for('wallet_page') }}">Wallet <span class="nav-balance">{{ "%.2f"|format(current_user['balance']) }}</span></a>{% endif %}
         {% if current_user['role'] == 'admin' %}<a href="{{ url_for('admin') }}">Admin</a>{% endif %}
+        <a href="{{ url_for('notification_list') }}">Notifications{% if unread_notifications %}<span class="notification-count">{{ unread_notifications }}</span>{% endif %}</a>
         <span class="account-label">{{ current_user['email'] }}</span>
         <form class="inline" method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Log out</button></form>
       {% else %}

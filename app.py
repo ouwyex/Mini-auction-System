@@ -1,5 +1,5 @@
 """Flask entry point for the student mini-auction demo."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 import secrets
@@ -9,6 +9,7 @@ import math
 from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
+import notifications
 import wallet
 from db import DATABASE, ensure_schema, init_db
 
@@ -17,6 +18,9 @@ app = Flask(__name__)
 _checked_databases = set()
 
 LOT_STATUSES = ("active", "closed", "unsold")
+# FR-02: a bid placed in the last 30 seconds extends the auction by 2 minutes.
+SOFT_CLOSE_WINDOW = timedelta(seconds=30)
+SOFT_CLOSE_EXTENSION = timedelta(minutes=2)
 app.config["SECRET_KEY"] = "change-this-development-key"
 app.config["DATABASE"] = str(DATABASE)
 
@@ -147,7 +151,14 @@ def common_context():
     user = None
     if session.get("user_id"):
         user = get_db().execute("SELECT id, email, role, balance FROM users WHERE id = ?", (session["user_id"],)).fetchone()
-    return {"current_user": user, "csrf_token": session["csrf_token"]}
+    unread_notifications = 0
+    if user:
+        unread_notifications = notifications.unread_count(get_db(), user["id"])
+    return {
+        "current_user": user,
+        "csrf_token": session["csrf_token"],
+        "unread_notifications": unread_notifications,
+    }
 
 
 @app.errorhandler(403)
@@ -443,9 +454,15 @@ def place_bid(lot_id):
             raise ValueError(f"Bid must be at least {minimum:.2f}.")
         database.execute("INSERT INTO bids (lot_id, bidder_id, amount) VALUES (?, ?, ?)",
                          (lot_id, session["user_id"], amount))
-        database.execute("UPDATE lots SET current_price = ? WHERE id = ?", (amount, lot_id))
+        closes_at = datetime.fromisoformat(lot["closes_at"])
+        extended = closes_at - datetime.now(timezone.utc) <= SOFT_CLOSE_WINDOW
+        new_closes_at = (closes_at + SOFT_CLOSE_EXTENSION) if extended else closes_at
+        database.execute("UPDATE lots SET current_price = ?, closes_at = ? WHERE id = ?",
+                         (amount, new_closes_at.isoformat(), lot_id))
+        notifications.notify_outbid(database, previous, session["user_id"], lot, amount)
         database.commit()
-        flash("Your bid was placed.", "success")
+        flash("Your bid was placed. The auction was extended by 2 minutes." if extended
+              else "Your bid was placed.", "success")
     except ValueError as error:
         database.rollback()
         flash(str(error), "error")
@@ -473,6 +490,29 @@ def my_bids():
         "WHERE bids.bidder_id = ? ORDER BY bids.id DESC", (session["user_id"],),
     ).fetchall()
     return render_template("my_bids.html", bids=rows)
+
+
+@app.route("/notifications")
+@login_required
+def notification_list():
+    rows = notifications.get_notifications(get_db(), session["user_id"])
+    return render_template("notifications.html", notifications=rows)
+
+
+@app.post("/notifications/<int:notification_id>/read")
+@login_required
+def mark_notification_read(notification_id):
+    notifications.mark_notification_read(get_db(), notification_id, session["user_id"])
+    get_db().commit()
+    return redirect(url_for("notification_list"))
+
+
+@app.post("/notifications/read-all")
+@login_required
+def mark_all_notifications_read():
+    notifications.mark_all_read(get_db(), session["user_id"])
+    get_db().commit()
+    return redirect(url_for("notification_list"))
 
 
 @app.route("/wallet")

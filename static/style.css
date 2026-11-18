@@ -132,3 +132,7 @@ button:hover, .button:hover { background: var(--orange-deep); transform: transla
 
 @media (max-width: 850px) { .filter-bar { grid-template-columns: 1fr 1fr; } .wallet-summary { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .filter-bar { grid-template-columns: 1fr; } }
+
+/* Notifications */
+.notification-count { display: inline-grid; min-width: 1.35rem; height: 1.35rem; place-items: center; margin-left: .25rem; padding: 0 .3rem; border-radius: 999px; color: white; background: var(--orange-deep); font-size: .72rem; font-weight: 700; }
+.notification-unread { border-left: 3px solid var(--orange); padding-left: 1rem; }

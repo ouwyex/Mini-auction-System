@@ -12,14 +12,14 @@ def create_notification(database, user_id, message, lot_id=None, notification_ty
     return cursor.lastrowid
 
 
-def notify_outbid(database, previous_bid, new_bidder_id, lot):
+def notify_outbid(database, previous_bid, new_bidder_id, lot, new_amount):
     """Notify the previous leader when another user takes the lead."""
     if previous_bid is None or previous_bid["bidder_id"] == new_bidder_id:
         return None
     return create_notification(
         database,
         previous_bid["bidder_id"],
-        f"Your bid on '{lot['title']}' has been outbid. The new highest bid is {new_bid:.2f}.",
+        f"Your bid on '{lot['title']}' has been outbid. The new highest bid is {new_amount:.2f}.",
         lot_id=lot["id"],
         notification_type="outbid",
     )
