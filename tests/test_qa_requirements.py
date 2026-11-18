@@ -14,6 +14,7 @@ def db():
 def test_tc01_fr01_bid_below_minimum_is_rejected(client):
     lid = lot_id()
     login(client, "buyer@example.com")
+    post(client, f"/lots/{lid}/deposit")                        # BR-01: deposit comes first
     post(client, f"/lots/{lid}/bid", {"amount": "10"})          # first bid = start price
     post(client, f"/lots/{lid}/bid", {"amount": "11"})          # needs >= 12 (step 2)
     with db() as c:
@@ -24,6 +25,7 @@ def test_tc02_fr02_bid_in_last_30_seconds_extends_by_2_minutes(client):
     closes = datetime.now(timezone.utc) + timedelta(seconds=15)
     lid = lot_id(closes=closes.isoformat())
     login(client, "buyer@example.com")
+    post(client, f"/lots/{lid}/deposit")
     post(client, f"/lots/{lid}/bid", {"amount": "10"})
     with db() as c:
         new_close = datetime.fromisoformat(c.execute("SELECT closes_at FROM lots").fetchone()[0])
@@ -33,6 +35,7 @@ def test_tc02_fr02_bid_in_last_30_seconds_extends_by_2_minutes(client):
 def test_tc03_bid_time_is_set_by_server(client):
     lid = lot_id()
     login(client, "buyer@example.com")
+    post(client, f"/lots/{lid}/deposit")
     post(client, f"/lots/{lid}/bid", {"amount": "10", "created_at": "2025-10-12 19:59:55"})
     with db() as c:
         stamp = c.execute("SELECT created_at FROM bids").fetchone()[0]
@@ -51,6 +54,11 @@ def test_tc04_br01_bid_requires_deposit(client):
 def test_tc05_two_parallel_bids_only_one_wins(client):
     lid = lot_id()
     a = add_user("a@example.com"); b = add_user("b@example.com")
+    for uid in (a, b):                                          # both pay the deposit first, then race
+        with flask_app.test_client() as c:
+            with c.session_transaction() as s:
+                s["user_id"] = uid; s["csrf_token"] = "test-token"
+            c.post(f"/lots/{lid}/deposit", data={"csrf_token": "test-token"})
     results = []
     def bid(uid):
         with flask_app.test_client() as c:

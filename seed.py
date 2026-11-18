@@ -14,6 +14,7 @@ def seed(database_path=DATABASE):
     connection.execute("PRAGMA foreign_keys = ON")
     ensure_schema(connection)
     # Seed data is resettable demo content; this is not used by the migration.
+    connection.execute("DELETE FROM notifications")
     connection.execute("DELETE FROM deposits")
     connection.execute("DELETE FROM wallet_transactions")
     connection.execute("DELETE FROM bids")
