@@ -1,25 +1,45 @@
 {% extends "base.html" %}
 {% block title %}Discover lots | Mini Auction{% endblock %}
 {% block content %}
+{% set headings = {'active': 'Active lots', 'closed': 'Closed lots', 'unsold': 'Unsold lots', 'all': 'All lots'} %}
 <section class="hero">
   <div class="hero-copy"><p class="eyebrow">A better kind of marketplace</p><h1>Find the one.<br>Make it yours.</h1><p>One-of-a-kind finds, a little friendly competition, and the thrill of the final bid.</p><a class="button" href="#active-lots">Explore active lots <span aria-hidden="true">↓</span></a></div>
   <aside class="hero-note"><strong>Good things go to good homes.</strong><span>Browse the latest lots and place a bid when something catches your eye.</span></aside>
 </section>
 <section id="active-lots">
-<div class="section-head"><div><p class="eyebrow">The current collection</p><h2>Active lots</h2></div><p>Find your next favorite thing.</p></div>
+<div class="section-head"><div><p class="eyebrow">The current collection</p><h2>{{ headings[filters['status']] }}</h2></div><p>Find your next favorite thing.</p></div>
+<form class="filter-bar" method="get" action="{{ url_for('home') }}#active-lots">
+  <label>Search by title <input type="search" name="q" maxlength="100" value="{{ filters['q'] }}" placeholder="e.g. camera"></label>
+  <label>Status
+    <select name="status">
+      <option value="active" {{ 'selected' if filters['status'] == 'active' }}>Active</option>
+      <option value="closed" {{ 'selected' if filters['status'] == 'closed' }}>Closed</option>
+      <option value="unsold" {{ 'selected' if filters['status'] == 'unsold' }}>Unsold</option>
+      <option value="all" {{ 'selected' if filters['status'] == 'all' }}>All</option>
+    </select>
+  </label>
+  <label>Min price <input type="number" name="min_price" min="0" step="0.01" value="{{ filters['min_price'] }}" placeholder="0.00"></label>
+  <label>Max price <input type="number" name="max_price" min="0" step="0.01" value="{{ filters['max_price'] }}" placeholder="Any"></label>
+  <div class="filter-actions"><button type="submit">Apply</button>{% if is_filtered %}<a class="button secondary" href="{{ url_for('home') }}#active-lots">Reset</a>{% endif %}</div>
+</form>
+{% if is_filtered %}<p class="result-count">{{ lots|length }} lot{{ '' if lots|length == 1 else 's' }} found</p>{% endif %}
 {% if lots %}
 <div class="cards">
 {% for item in lots %}{% set lot = item['lot'] %}
   <article class="lot-card">
     <div class="lot-art" aria-hidden="true"><span>{{ lot['title'][:1] }}</span></div>
     <div class="lot-body">
-      <div class="lot-topline"><span class="tag">Live auction</span><span class="lot-time">{{ item['remaining'] }} left</span></div>
+      <div class="lot-topline">
+        {% if lot['status'] == 'active' %}<span class="tag">Live auction</span><span class="lot-time">{{ item['remaining'] }} left</span>
+        {% else %}<span class="tag">{{ lot['status'] }}</span>{% endif %}
+      </div>
       <h3 class="lot-title"><a href="{{ url_for('lot_detail', lot_id=lot['id']) }}">{{ lot['title'] }}</a></h3>
-      <div class="price-row"><div><span class="price-label">Current bid</span><strong class="price">{{ "%.2f"|format(lot['current_price']) }}</strong></div><span class="arrow" aria-hidden="true">↗</span></div>
+      <div class="price-row"><div><span class="price-label">{{ 'Current bid' if lot['status'] == 'active' else 'Final price' }}</span><strong class="price">{{ "%.2f"|format(lot['current_price']) }}</strong></div><span class="arrow" aria-hidden="true">↗</span></div>
     </div>
   </article>
 {% endfor %}
 </div>
+{% elif is_filtered %}<div class="empty-state">No lots match these filters. Try a wider price range or a different search.</div>
 {% else %}<div class="empty-state">No active lots right now. Check back soon for something special.</div>{% endif %}
 </section>
 {% endblock %}

@@ -111,10 +111,24 @@ button:hover, .button:hover { background: var(--orange-deep); transform: transla
 @media (max-width: 560px) { main { width: min(100% - 32px, 1160px); padding: 34px 0 60px; } .site-header { padding-inline: 16px; } nav { gap: .1rem; } nav a { padding: .45rem .55rem; font-size: .8rem; } .hero { min-height: 0; margin-bottom: 2.5rem; padding: 2rem 1.5rem; border-radius: 20px; } .hero-note { width: 100%; } .cards { grid-template-columns: 1fr; } .lot-art { height: 155px; } .page-heading, .section-head { align-items: flex-start; flex-direction: column; } .data-list li, .data-row { align-items: flex-start; flex-direction: column; } .list-actions { flex-wrap: wrap; } .site-footer { flex-direction: column; padding-inline: 16px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
 
-.deposit-box { display: grid; gap: .45rem; justify-items: start; margin: 0 0 1.4rem; padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: 16px; background: var(--green-light); }
-.deposit-box strong { color: var(--green); font: 800 1.4rem 'Manrope', sans-serif; }
-.deposit-box form { margin: .3rem 0; }
-.deposit-state { margin: 0; color: var(--muted); font-size: .88rem; font-weight: 600; }
-.deposit-state.ok { color: var(--green); }
-.wallet-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-.wallet-summary > div { padding: 1.2rem 1.4rem; border: 1px solid var(--line); border-radius: 18px; background: var(--white); }
+/* Home page filter bar */
+.filter-bar { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; align-items: end; gap: .8rem; margin-bottom: 1.6rem; padding: 1.1rem; border: 1px solid var(--line); border-radius: 16px; background: var(--white); }
+.filter-actions { display: flex; align-items: center; gap: .6rem; }
+.result-count { margin: -.6rem 0 1.2rem; color: var(--muted); font-size: .86rem; }
+
+/* Wallet page */
+.wallet-summary { display: grid; grid-template-columns: 1fr 1fr; align-items: stretch; gap: 1.1rem; margin-bottom: 2rem; }
+.wallet-balance { padding: 1.5rem; border-radius: 20px; color: white; background: var(--green); }
+.wallet-balance .price-label { color: rgba(255,255,255,.72); }
+.wallet-balance .price { color: white; font-size: 2.3rem; }
+.wallet-held { padding: 1.5rem; border: 1px solid var(--line); border-radius: 20px; background: var(--white); }
+.wallet-held .price { font-size: 2.3rem; }
+.wallet-form { margin-bottom: 2rem; }
+.amount-in { color: #2f7a4c; font-weight: 700; }
+.amount-out { color: var(--orange-deep); font-weight: 700; }
+.ledger-amount { text-align: right; white-space: nowrap; }
+.ledger-amount .status-text { display: block; }
+.nav-balance { margin-left: .2rem; padding: .15rem .5rem; border-radius: 999px; color: var(--green); background: var(--green-light); font-size: .75rem; }
+
+@media (max-width: 850px) { .filter-bar { grid-template-columns: 1fr 1fr; } .wallet-summary { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .filter-bar { grid-template-columns: 1fr; } }

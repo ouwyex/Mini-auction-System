@@ -1,7 +1,7 @@
 """Safely migrate existing auction databases to the unified user role."""
 import sqlite3
 
-from db import BASE_DIR, DATABASE, ensure_deposit_support
+from db import DATABASE, ensure_schema
 
 
 def migrate(database_path=DATABASE):
@@ -35,10 +35,10 @@ def migrate(database_path=DATABASE):
         raise
     finally:
         connection.close()
+    # Adds profile columns, user balances, the wallet_transactions table and the filter index.
     connection = sqlite3.connect(database_path)
     try:
-        connection.executescript((BASE_DIR / "schema.sql").read_text(encoding="utf-8-sig"))
-        ensure_deposit_support(connection)
+        ensure_schema(connection)
     finally:
         connection.close()
     print("Database migration complete; existing accounts and auction data were preserved.")
