@@ -84,14 +84,14 @@ def _return(database, deposit, title, reason):
     database.execute("UPDATE deposits SET status = 'returned' WHERE id = ?", (deposit["id"],))
 
 
-def settle_lot(database, lot, winner_id):
+def settle_lot(database, lot, winner_id, reason="Lot closed"):
     """Close out a lot's deposits: the winner's is applied, all other held deposits are returned."""
     held = database.execute("SELECT * FROM deposits WHERE lot_id = ? AND status = 'held'", (lot["id"],)).fetchall()
     for deposit in held:
         if deposit["user_id"] == winner_id:
             database.execute("UPDATE deposits SET status = 'applied' WHERE id = ?", (deposit["id"],))
         else:
-            _return(database, deposit, lot["title"], "Lot closed")
+            _return(database, deposit, lot["title"], reason)
 
 
 def remove_lot_deposits(database, lot, reason):

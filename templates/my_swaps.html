@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}My swaps | Mini Auction{% endblock %}
+{% block content %}<div class="page-heading"><div><p class="eyebrow">Your activity</p><h1>My swap offers</h1><p>Items you have offered instead of money, and what the sellers decided.</p></div></div>
+{% if offers %}<ul class="data-list">{% for offer in offers %}<li>
+  <span><strong>{{ offer['item_title'] }}</strong>{% if offer['estimated_value'] %} · estimated value {{ "%.2f"|format(offer['estimated_value']) }}{% endif %}<br><span class="status-text">For <a href="{{ url_for('lot_detail', lot_id=offer['lot_id']) }}">{{ offer['lot_title'] }}</a> · {{ offer['created_at'] }}</span></span>
+  <span class="tag">{{ offer['status'] }}</span>
+</li>{% endfor %}</ul>
+{% else %}<div class="empty-state">You have not offered any items yet. Look for lots tagged "Accepts item swaps".</div>{% endif %}{% endblock %}

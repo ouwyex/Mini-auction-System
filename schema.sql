@@ -1,4 +1,4 @@
-﻿-- Six tables form the small auction database.
+﻿-- Seven tables form the small auction database.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS lots (
     current_price REAL NOT NULL,
     closes_at TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed', 'unsold')),
+    -- 1 when the seller also accepts offers of another item instead of money.
+    accepts_swaps INTEGER NOT NULL DEFAULT 0 CHECK (accepts_swaps IN (0, 1)),
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -81,3 +83,26 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
     ON notifications(user_id, is_read, created_at DESC);
+
+-- Item swap offers: instead of bidding money, a user offers one of their own items for a
+-- lot that has accepts_swaps = 1. The seller accepts or rejects each offer. Accepting one
+-- closes the lot as swapped (the lot keeps status 'closed'; the accepted offer marks the swap).
+CREATE TABLE IF NOT EXISTS swap_offers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lot_id INTEGER NOT NULL REFERENCES lots(id),
+    offerer_id INTEGER NOT NULL REFERENCES users(id),
+    item_title TEXT NOT NULL,
+    item_description TEXT NOT NULL,
+    estimated_value REAL CHECK (estimated_value IS NULL OR estimated_value > 0),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'accepted', 'rejected', 'withdrawn', 'expired')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT
+);
+
+-- A user can have only one open offer per lot, but may offer again after a rejection or a
+-- withdrawal; a lot can end with at most one accepted offer. Both rules are partial unique indexes.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_swap_one_pending ON swap_offers (lot_id, offerer_id) WHERE status = 'pending';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_swap_one_accepted ON swap_offers (lot_id) WHERE status = 'accepted';
+CREATE INDEX IF NOT EXISTS idx_swap_lot_status ON swap_offers (lot_id, status);
+CREATE INDEX IF NOT EXISTS idx_swap_offerer ON swap_offers (offerer_id, id);

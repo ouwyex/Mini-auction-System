@@ -11,6 +11,10 @@ LATER_USER_COLUMNS = {
     "last_name": "TEXT",
     "balance": "REAL NOT NULL DEFAULT 0 CHECK (balance >= 0)",
 }
+# Same idea for the lots table (item swaps).
+LATER_LOT_COLUMNS = {
+    "accepts_swaps": "INTEGER NOT NULL DEFAULT 0 CHECK (accepts_swaps IN (0, 1))",
+}
 
 
 def get_db():
@@ -31,8 +35,8 @@ def init_db():
 def ensure_schema(connection):
     """Bring an older database up to date without touching its data.
 
-    Creates missing tables and indexes (deposits, wallet_transactions, filter index) and
-    adds the profile and balance columns to an existing users table.
+    Creates missing tables and indexes (deposits, wallet_transactions, swap_offers, filter index),
+    adds the profile and balance columns to an existing users table, and adds lots.accepts_swaps.
     """
     # An interim version stored bid holds in wallet_transactions with different types.
     # Keep that table as a backup instead of deleting it, then create the current one.
@@ -46,6 +50,10 @@ def ensure_schema(connection):
     for column, definition in LATER_USER_COLUMNS.items():
         if column not in existing:
             connection.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+    existing_lot_columns = {row[1] for row in connection.execute("PRAGMA table_info(lots)")}
+    for column, definition in LATER_LOT_COLUMNS.items():
+        if column not in existing_lot_columns:
+            connection.execute(f"ALTER TABLE lots ADD COLUMN {column} {definition}")
     connection.commit()
 
 

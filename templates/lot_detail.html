@@ -4,13 +4,14 @@
 <div class="lot-detail">
   <div class="detail-art" aria-hidden="true"><span>{{ lot['title'][:1] }}</span></div>
   <section class="detail-copy">
-    <span class="tag">{{ lot['status'] }} auction</span>
+    <span class="tag">{{ 'swapped' if swap else lot['status'] }} auction</span>{% if lot['accepts_swaps'] and lot['status'] == 'active' %} <span class="tag swap-tag">Accepts item swaps</span>{% endif %}
     <h1>{{ lot['title'] }}</h1>
     <p class="detail-description">{{ lot['description'] }}</p>
     <div class="detail-meta"><span>Seller · {{ lot['seller_email'] }}</span><span>Closes · {{ lot['closes_at'] }} UTC</span></div>
     <div class="detail-price"><span class="price-label">Current bid</span><strong class="price">{{ "%.2f"|format(lot['current_price']) }}</strong></div>
     {% if lot['status'] in ('closed', 'unsold') %}
-      {% if winner %}<p>Winner: <strong>{{ winner }}</strong> · Final price <strong>{{ "%.2f"|format(lot['current_price']) }}</strong></p>
+      {% if swap %}<p>This lot was swapped for <strong>{{ swap['item_title'] }}</strong> offered by {{ swap['offerer_email'] }}. It ended without a bidding winner.</p>
+      {% elif winner %}<p>Winner: <strong>{{ winner }}</strong> · Final price <strong>{{ "%.2f"|format(lot['current_price']) }}</strong></p>
       {% else %}<p>This lot closed without bids.</p>{% endif %}
     {% endif %}
     {% if current_user and current_user['role'] == 'user' and lot['status'] == 'active' and lot['seller_id'] != current_user['id'] %}
@@ -29,10 +30,44 @@
     </form>
     {% endif %}
     {% endif %}
+    {% if current_user and current_user['role'] == 'user' and lot['status'] == 'active' and lot['accepts_swaps'] and lot['seller_id'] != current_user['id'] %}
+    {% if my_offer and my_offer['status'] == 'pending' %}
+    <div class="swap-box">
+      <strong>Your swap offer is waiting for the seller</strong>
+      <p class="status-text">{{ my_offer['item_title'] }}{% if my_offer['estimated_value'] %} · estimated value {{ "%.2f"|format(my_offer['estimated_value']) }}{% endif %}</p>
+      <form class="inline" method="post" action="{{ url_for('withdraw_swap', offer_id=my_offer['id']) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Withdraw offer</button></form>
+    </div>
+    {% else %}
+    <form method="post" action="{{ url_for('offer_swap', lot_id=lot['id']) }}" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <h2>Offer an item instead of money</h2>
+      <p class="status-text">No deposit is needed. The seller reads your offer and decides; the site does not check the item or its value.{% if my_offer %} Your previous offer "{{ my_offer['item_title'] }}" was {{ my_offer['status'] }}.{% endif %}</p>
+      <label>Item you offer <input name="item_title" required maxlength="120" placeholder="e.g. Used smartphone"></label>
+      <label>Description <textarea name="item_description" required maxlength="1000" rows="3" placeholder="Condition, age, what is included"></textarea></label>
+      <label>Estimated value (optional) <input type="number" name="estimated_value" min="0.01" step="0.01" placeholder="0.00"></label>
+      <button type="submit">Send swap offer <span aria-hidden="true">⇄</span></button>
+    </form>
+    {% endif %}
+    {% elif my_offer and lot['status'] != 'active' %}
+    <p class="status-text">Your swap offer "{{ my_offer['item_title'] }}" ended as {{ my_offer['status'] }}.</p>
+    {% endif %}
   </section>
 </div>
 <section class="admin-section"><div class="section-head"><div><p class="eyebrow">The action so far</p><h2>Bid history</h2></div></div>
 {% if bids %}<ul class="data-list">{% for bid in bids %}<li><span><strong>{{ "%.2f"|format(bid['amount']) }}</strong> by {{ bid['bidder_email'] }}</span><span class="status-text">{{ bid['created_at'] }}</span></li>{% endfor %}</ul>
 {% else %}<div class="empty-state">No bids yet. Be the first to make a move.</div>{% endif %}
 </section>
+{% if offers is not none and (lot['accepts_swaps'] or offers) %}
+<section class="admin-section"><div class="section-head"><div><p class="eyebrow">Item swaps</p><h2>Swap offers</h2></div></div>
+{% if offers %}<p class="status-text">Accepting an offer closes the lot, rejects the other offers, and returns every bidder's deposit.</p>
+<ul class="data-list">{% for offer in offers %}<li>
+  <span><strong>{{ offer['item_title'] }}</strong>{% if offer['estimated_value'] %} · estimated value {{ "%.2f"|format(offer['estimated_value']) }}{% endif %}<br>{{ offer['item_description'] }}<br><span class="status-text">From {{ offer['offerer_email'] }} · {{ offer['created_at'] }} · {{ offer['status'] }}</span></span>
+  {% if offer['status'] == 'pending' and lot['status'] == 'active' %}<span class="list-actions">
+    <form class="inline" method="post" action="{{ url_for('accept_swap', offer_id=offer['id']) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">Accept</button></form>
+    <form class="inline" method="post" action="{{ url_for('reject_swap', offer_id=offer['id']) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary-button" type="submit">Reject</button></form>
+  </span>{% endif %}
+</li>{% endfor %}</ul>
+{% else %}<div class="empty-state">No swap offers yet.</div>{% endif %}
+</section>
+{% endif %}
 {% endblock %}

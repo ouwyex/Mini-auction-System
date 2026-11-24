@@ -20,6 +20,7 @@
   </label>
   <label>Min price <input type="number" name="min_price" min="0" step="0.01" value="{{ filters['min_price'] }}" placeholder="0.00"></label>
   <label>Max price <input type="number" name="max_price" min="0" step="0.01" value="{{ filters['max_price'] }}" placeholder="Any"></label>
+  <label class="check filter-check"><input type="checkbox" name="swaps" value="1" {{ 'checked' if filters['swaps'] }}><span>Only lots that accept item swaps</span></label>
   <div class="filter-actions"><button type="submit">Apply</button>{% if is_filtered %}<a class="button secondary" href="{{ url_for('home') }}#active-lots">Reset</a>{% endif %}</div>
 </form>
 {% if is_filtered %}<p class="result-count">{{ lots|length }} lot{{ '' if lots|length == 1 else 's' }} found</p>{% endif %}
@@ -31,10 +32,11 @@
     <div class="lot-body">
       <div class="lot-topline">
         {% if lot['status'] == 'active' %}<span class="tag">Live auction</span><span class="lot-time">{{ item['remaining'] }} left</span>
-        {% else %}<span class="tag">{{ lot['status'] }}</span>{% endif %}
+        {% else %}<span class="tag">{{ 'swapped' if lot['swapped'] else lot['status'] }}</span>{% endif %}
       </div>
       <h3 class="lot-title"><a href="{{ url_for('lot_detail', lot_id=lot['id']) }}">{{ lot['title'] }}</a></h3>
-      <div class="price-row"><div><span class="price-label">{{ 'Current bid' if lot['status'] == 'active' else 'Final price' }}</span><strong class="price">{{ "%.2f"|format(lot['current_price']) }}</strong></div><span class="arrow" aria-hidden="true">↗</span></div>
+      {% if lot['accepts_swaps'] and lot['status'] == 'active' %}<span class="swap-chip">Swaps welcome</span>{% endif %}
+      <div class="price-row"><div><span class="price-label">{{ 'Current bid' if lot['status'] == 'active' else ('Last bid' if lot['swapped'] else 'Final price') }}</span><strong class="price">{{ "%.2f"|format(lot['current_price']) }}</strong></div><span class="arrow" aria-hidden="true">↗</span></div>
     </div>
   </article>
 {% endfor %}
