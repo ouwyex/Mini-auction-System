@@ -4,6 +4,7 @@ import sqlite3
 
 from werkzeug.security import generate_password_hash
 
+import swaps
 import wallet
 from db import DATABASE, ensure_schema
 
@@ -15,6 +16,7 @@ def seed(database_path=DATABASE):
     ensure_schema(connection)
     # Seed data is resettable demo content; this is not used by the migration.
     connection.execute("DELETE FROM notifications")
+    connection.execute("DELETE FROM swap_offers")
     connection.execute("DELETE FROM deposits")
     connection.execute("DELETE FROM wallet_transactions")
     connection.execute("DELETE FROM bids")
@@ -63,9 +65,16 @@ def seed(database_path=DATABASE):
             wallet.pay_deposit(connection, bidder_id, lot)
         connection.execute("INSERT INTO bids (lot_id, bidder_id, amount) VALUES (?, ?, ?)", (lot_id, bidder_id, amount))
         connection.execute("UPDATE lots SET current_price = ? WHERE id = ?", (amount, lot_id))
+
+    # Two lots accept item swaps; the board game bundle already has one pending offer from user1.
+    for lot_index in (1, 5):
+        connection.execute("UPDATE lots SET accepts_swaps = 1 WHERE id = ?", (lot_ids[lot_index],))
+    swap_lot = connection.execute("SELECT * FROM lots WHERE id = ?", (lot_ids[5],)).fetchone()
+    swaps.create_offer(connection, swap_lot, ids["user1@example.com"], "Chess set",
+                       "Wooden chess set with all pieces, lightly used.", 15)
     connection.commit()
     connection.close()
-    print("Seeded 1 admin, 4 users (500.00 wallet top-up each), 6 lots, 4 bids, and 4 deposits.")
+    print("Seeded 1 admin, 4 users (500.00 wallet top-up each), 6 lots, 4 bids, 4 deposits, and 1 swap offer.")
     print("Demo passwords: admin-demo and user-demo.")
 
 

@@ -136,3 +136,15 @@ button:hover, .button:hover { background: var(--orange-deep); transform: transla
 /* Notifications */
 .notification-count { display: inline-grid; min-width: 1.35rem; height: 1.35rem; place-items: center; margin-left: .25rem; padding: 0 .3rem; border-radius: 999px; color: white; background: var(--orange-deep); font-size: .72rem; font-weight: 700; }
 .notification-unread { border-left: 3px solid var(--orange); padding-left: 1rem; }
+
+/* Item swaps */
+label.check { display: flex; align-items: flex-start; gap: .7rem; font-weight: 600; }
+label.check input { width: auto; min-height: 0; margin-top: .25rem; }
+.filter-bar .filter-check { grid-column: 1 / -1; }
+.swap-tag { margin-left: .3rem; color: #7a4a12; background: #fdeed6; }
+.swap-tag::before { background: var(--orange); }
+.swap-chip { display: inline-block; margin: -.2rem 0 .6rem; padding: .2rem .55rem; border-radius: 999px; color: #7a4a12; background: #fdeed6; font-size: .72rem; font-weight: 700; }
+.swap-box { margin: 1.2rem 0; padding: 1rem 1.1rem; border: 1px solid var(--line); border-radius: 14px; background: var(--white); }
+.swap-box p { margin: .3rem 0 .8rem; }
+.secondary-button { color: var(--green); background: #e8eee8; }
+.secondary-button:hover { color: var(--green); background: #dce7dc; }

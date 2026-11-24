@@ -10,6 +10,7 @@ from flask import Flask, abort, flash, g, redirect, render_template, request, se
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import notifications
+import swaps
 import wallet
 from db import DATABASE, ensure_schema, init_db
 
@@ -69,6 +70,8 @@ def close_expired_lots(database):
                              ("closed" if top else "unsold", lot["id"]))
             # The winner's deposit counts toward the purchase; all other deposits go back to their owners.
             wallet.settle_lot(database, lot, top["bidder_id"] if top else None)
+            # Swap offers that were never answered can no longer be accepted.
+            swaps.expire_lot_offers(database, lot)
         database.commit()
     except Exception:
         database.rollback()
@@ -106,6 +109,13 @@ def user_required(view):
             abort(403, description="Administrators do not have a wallet.")
         return view(*args, **kwargs)
     return wrapped
+
+
+def regular_user_or_403():
+    """Swap offers are made by regular users; administrators do not take part."""
+    user = get_db().execute("SELECT role FROM users WHERE id = ?", (session["user_id"],)).fetchone()
+    if not user or user["role"] != "user":
+        abort(403, description="Administrators cannot take part in swaps.")
 
 
 def owned_lot_or_403(lot_id):
@@ -203,8 +213,14 @@ def home():
         flash("Minimum price is higher than maximum price. The price filter was ignored.", "error")
         min_price = max_price = None
 
-    sql = "SELECT id, title, current_price, closes_at, status FROM lots WHERE 1 = 1"
+    swaps_only = request.args.get("swaps") == "1"
+
+    sql = ("SELECT id, title, current_price, closes_at, status, accepts_swaps, "
+           "EXISTS (SELECT 1 FROM swap_offers WHERE swap_offers.lot_id = lots.id "
+           "AND swap_offers.status = 'accepted') AS swapped FROM lots WHERE 1 = 1")
     params = []
+    if swaps_only:
+        sql += " AND accepts_swaps = 1"
     if status != "all":
         sql += " AND status = ?"
         params.append(status)
@@ -235,11 +251,12 @@ def home():
                 remaining = "time unavailable"
         lot_rows.append({"lot": lot, "remaining": remaining})
     filters = {
-        "status": status, "q": query,
+        "status": status, "q": query, "swaps": swaps_only,
         "min_price": request.args.get("min_price", "").strip() if min_price is not None else "",
         "max_price": request.args.get("max_price", "").strip() if max_price is not None else "",
     }
-    is_filtered = status != "active" or bool(query) or min_price is not None or max_price is not None
+    is_filtered = (status != "active" or bool(query) or min_price is not None or max_price is not None
+                   or swaps_only)
     return render_template("home.html", lots=lot_rows, filters=filters, statuses=LOT_STATUSES,
                            is_filtered=is_filtered)
 
@@ -312,8 +329,15 @@ def lot_detail(lot_id):
         "JOIN users ON bids.bidder_id = users.id WHERE bids.lot_id = ? "
         "ORDER BY bids.amount DESC, bids.id ASC", (lot_id,)
     ).fetchall()
+    swap = swaps.accepted_offer(database, lot_id)
+    offers = my_offer = None
+    if session.get("user_id"):
+        if lot["seller_id"] == session["user_id"]:
+            offers = swaps.offers_for_lot(database, lot_id)  # only the seller sees every offer
+        else:
+            my_offer = swaps.latest_offer_by(database, lot_id, session["user_id"])
     winner = None
-    if lot["status"] == "closed" and bids:
+    if lot["status"] == "closed" and bids and not swap:
         winner = database.execute("SELECT email FROM users WHERE id = ?", (database.execute(
             "SELECT bidder_id FROM bids WHERE lot_id = ? ORDER BY amount DESC, id ASC LIMIT 1", (lot_id,)
         ).fetchone()[0],)).fetchone()["email"]
@@ -322,7 +346,8 @@ def lot_detail(lot_id):
         deposit = database.execute("SELECT status FROM deposits WHERE lot_id = ? AND user_id = ?",
                                   (lot_id, session["user_id"])).fetchone()
     return render_template("lot_detail.html", lot=lot, bids=bids, winner=winner, deposit=deposit,
-                           deposit_amount=wallet.deposit_amount(lot["start_price"]))
+                           deposit_amount=wallet.deposit_amount(lot["start_price"]),
+                           swap=swap, offers=offers, my_offer=my_offer)
 
 
 def parse_closing_time(value):
@@ -340,6 +365,7 @@ def create_lot():
         title = request.form.get("title", "").strip()
         description = request.form.get("description", "").strip()
         closes_at = parse_closing_time(request.form.get("closes_at"))
+        accepts_swaps = 1 if request.form.get("accepts_swaps") else 0
         try:
             start_price = float(request.form.get("start_price", ""))
             bid_step = float(request.form.get("bid_step", ""))
@@ -357,9 +383,10 @@ def create_lot():
             flash("Closing time must be in the future.", "error")
         else:
             get_db().execute(
-                "INSERT INTO lots (seller_id, title, description, start_price, bid_step, current_price, closes_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (session["user_id"], title, description, start_price, bid_step, start_price, closes_at.isoformat()),
+                "INSERT INTO lots (seller_id, title, description, start_price, bid_step, current_price, closes_at, "
+                "accepts_swaps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (session["user_id"], title, description, start_price, bid_step, start_price, closes_at.isoformat(),
+                 accepts_swaps),
             )
             get_db().commit()
             flash("Lot created.", "success")
@@ -375,10 +402,13 @@ def edit_lot(lot_id):
         abort(403, description="Only active lots can be edited.")
     if get_db().execute("SELECT 1 FROM deposits WHERE lot_id = ? LIMIT 1", (lot_id,)).fetchone():
         abort(403, description="A lot with paid deposits cannot be edited.")
+    if get_db().execute("SELECT 1 FROM swap_offers WHERE lot_id = ? LIMIT 1", (lot_id,)).fetchone():
+        abort(403, description="A lot with swap offers cannot be edited.")
     if request.method == "POST":
         title = request.form.get("title", "").strip()
         description = request.form.get("description", "").strip()
         closing = parse_closing_time(request.form.get("closes_at"))
+        accepts_swaps = 1 if request.form.get("accepts_swaps") else 0
         if not title or not description:
             flash("Title and description are required.", "error")
         elif not closing or closing <= datetime.now(timezone.utc):
@@ -393,8 +423,9 @@ def edit_lot(lot_id):
             else:
                 get_db().execute(
                     "UPDATE lots SET title = ?, description = ?, start_price = ?, bid_step = ?, "
-                    "current_price = ?, closes_at = ? WHERE id = ? AND seller_id = ?",
-                    (title, description, price, step, price, closing.isoformat(), lot_id, session["user_id"]),
+                    "current_price = ?, closes_at = ?, accepts_swaps = ? WHERE id = ? AND seller_id = ?",
+                    (title, description, price, step, price, closing.isoformat(), accepts_swaps, lot_id,
+                     session["user_id"]),
                 )
                 get_db().commit()
                 return redirect(url_for("my_lots"))
@@ -411,13 +442,14 @@ def cancel_lot(lot_id):
     try:
         database.execute("BEGIN IMMEDIATE")
         wallet.remove_lot_deposits(database, lot, "Lot cancelled")
+        swaps.remove_lot_offers(database, lot, "Lot cancelled")
         database.execute("DELETE FROM lots WHERE id = ? AND seller_id = ?", (lot_id, session["user_id"]))
         database.commit()
     except sqlite3.Error:
         database.rollback()
         flash("We could not cancel the lot. Please try again.", "error")
         return redirect(url_for("my_lots"))
-    flash("Lot cancelled. Any deposits were returned.", "success")
+    flash("Lot cancelled. Any deposits were returned and swap offers were cancelled.", "success")
     return redirect(url_for("my_lots"))
 
 
@@ -475,7 +507,12 @@ def place_bid(lot_id):
 @app.route("/my-lots")
 @login_required
 def my_lots():
-    lots = get_db().execute("SELECT * FROM lots WHERE seller_id = ? ORDER BY id DESC", (session["user_id"],)).fetchall()
+    lots = get_db().execute(
+        "SELECT lots.*, "
+        "(SELECT COUNT(*) FROM swap_offers WHERE swap_offers.lot_id = lots.id AND swap_offers.status = 'pending') "
+        "AS pending_offers, "
+        "EXISTS (SELECT 1 FROM swap_offers WHERE swap_offers.lot_id = lots.id AND swap_offers.status = 'accepted') "
+        "AS swapped FROM lots WHERE seller_id = ? ORDER BY id DESC", (session["user_id"],)).fetchall()
     return render_template("my_lots.html", lots=lots)
 
 
@@ -484,12 +521,114 @@ def my_lots():
 def my_bids():
     rows = get_db().execute(
         "SELECT lots.*, bids.amount AS my_bid, "
+        "EXISTS (SELECT 1 FROM swap_offers WHERE swap_offers.lot_id = lots.id AND swap_offers.status = 'accepted') "
+        "AS swapped, "
         "CASE WHEN lots.status = 'closed' AND bids.bidder_id = "
         "(SELECT bidder_id FROM bids b2 WHERE b2.lot_id = lots.id ORDER BY amount DESC, id ASC LIMIT 1) "
+        "AND NOT EXISTS (SELECT 1 FROM swap_offers WHERE swap_offers.lot_id = lots.id "
+        "AND swap_offers.status = 'accepted') "
         "THEN 1 ELSE 0 END AS won FROM bids JOIN lots ON lots.id = bids.lot_id "
         "WHERE bids.bidder_id = ? ORDER BY bids.id DESC", (session["user_id"],),
     ).fetchall()
     return render_template("my_bids.html", bids=rows)
+
+
+@app.post("/lots/<int:lot_id>/swap-offers")
+@login_required
+def offer_swap(lot_id):
+    """Offer one of your own items instead of money on a lot that accepts swaps."""
+    regular_user_or_403()
+    database = get_db()
+    try:
+        title, description, value = swaps.parse_offer(
+            request.form.get("item_title"), request.form.get("item_description"),
+            request.form.get("estimated_value"))
+        database.execute("BEGIN IMMEDIATE")
+        lot = database.execute("SELECT * FROM lots WHERE id = ?", (lot_id,)).fetchone()
+        if not lot:
+            raise ValueError("This lot does not exist.")
+        if lot["status"] != "active" or datetime.fromisoformat(lot["closes_at"]) <= datetime.now(timezone.utc):
+            raise ValueError("This lot is not active.")
+        if not lot["accepts_swaps"]:
+            raise ValueError("The seller does not accept item swaps for this lot.")
+        if lot["seller_id"] == session["user_id"]:
+            raise ValueError("You cannot offer a swap on your own lot.")
+        swaps.create_offer(database, lot, session["user_id"], title, description, value)
+        database.commit()
+        flash("Your swap offer was sent. The seller will accept or reject it.", "success")
+    except ValueError as error:
+        database.rollback()
+        flash(str(error), "error")
+    except sqlite3.Error:
+        database.rollback()
+        flash("We could not send your offer. Please try again.", "error")
+    return redirect(url_for("lot_detail", lot_id=lot_id))
+
+
+def answer_swap(offer_id, action):
+    """Accept or reject (seller) or withdraw (offerer) one pending swap offer."""
+    database = get_db()
+    offer = swaps.get_offer(database, offer_id)
+    if offer is None:
+        abort(404)
+    if action == "withdraw":
+        if offer["offerer_id"] != session["user_id"]:
+            abort(403, description="You can only withdraw your own swap offers.")
+    elif offer["seller_id"] != session["user_id"]:
+        abort(403, description="Only the seller of the lot can answer swap offers.")
+    lot_id = offer["lot_id"]
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        # Re-read inside the write lock: the offer or the lot may have changed a moment ago.
+        offer = swaps.get_offer(database, offer_id)
+        if offer is None or offer["status"] != swaps.PENDING:
+            raise ValueError("This offer has already been answered, withdrawn, or has expired.")
+        lot = database.execute("SELECT * FROM lots WHERE id = ?", (lot_id,)).fetchone()
+        if action != "withdraw" and (
+                lot["status"] != "active" or datetime.fromisoformat(lot["closes_at"]) <= datetime.now(timezone.utc)):
+            raise ValueError("This lot is no longer active, so its offers can no longer be answered.")
+        if action == "accept":
+            swaps.accept_offer(database, offer, lot)
+            message = "Swap accepted. The lot is closed and all deposits were returned."
+        elif action == "reject":
+            swaps.reject_offer(database, offer, lot)
+            message = "Swap offer rejected."
+        else:
+            swaps.withdraw_offer(database, offer)
+            message = "Your swap offer was withdrawn."
+        database.commit()
+        flash(message, "success")
+    except ValueError as error:
+        database.rollback()
+        flash(str(error), "error")
+    except sqlite3.Error:
+        database.rollback()
+        flash("We could not update the swap offer. Please try again.", "error")
+    return redirect(url_for("lot_detail", lot_id=lot_id))
+
+
+@app.post("/swap-offers/<int:offer_id>/accept")
+@login_required
+def accept_swap(offer_id):
+    return answer_swap(offer_id, "accept")
+
+
+@app.post("/swap-offers/<int:offer_id>/reject")
+@login_required
+def reject_swap(offer_id):
+    return answer_swap(offer_id, "reject")
+
+
+@app.post("/swap-offers/<int:offer_id>/withdraw")
+@login_required
+def withdraw_swap(offer_id):
+    return answer_swap(offer_id, "withdraw")
+
+
+@app.route("/my-swaps")
+@login_required
+def my_swaps():
+    return render_template("my_swaps.html", offers=swaps.user_offers(get_db(), session["user_id"]))
 
 
 @app.route("/notifications")
@@ -598,6 +737,7 @@ def admin():
                 if lot:
                     # Refund held deposits and clear deposit rows so the lot can be removed.
                     wallet.remove_lot_deposits(database, lot, "Lot removed")
+                    swaps.remove_lot_offers(database, lot, "Lot removed")
                 database.execute("DELETE FROM bids WHERE lot_id = ?", (lot_id,))
                 database.execute("DELETE FROM lots WHERE id = ?", (lot_id,))
             else:
