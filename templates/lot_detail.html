@@ -16,7 +16,7 @@
     {% endif %}
     {% if current_user and current_user['role'] == 'user' and lot['status'] == 'active' and lot['seller_id'] != current_user['id'] %}
     {% if deposit and deposit['status'] == 'held' %}
-    <p class="status-text">Your deposit of {{ "%.2f"|format(deposit_amount) }} is held. It is returned if you do not win and counts toward the price if you do.</p>
+    <p class="status-text">{{ "%.2f"|format(deposit['amount']) }} is held for this lot. Before each bid, your held amount must cover the full bid; any increase comes from your available wallet balance. If another bidder outbids you, the excess reserve is returned. This is not an automatic penalty.</p>
     <form method="post" action="{{ url_for('place_bid', lot_id=lot['id']) }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>Your bid <input type="number" name="amount" min="0.01" step="0.01" required></label>
@@ -25,7 +25,7 @@
     {% else %}
     <form method="post" action="{{ url_for('pay_deposit', lot_id=lot['id']) }}" class="form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <p class="status-text">To bid, first pay a deposit of {{ "%.2f"|format(deposit_amount) }} (10% of the start price). Wallet balance: {{ "%.2f"|format(current_user['balance']) }} · <a href="{{ url_for('wallet_page') }}">Top up</a></p>
+      <p class="status-text">To bid, first pay an entry deposit of {{ "%.2f"|format(deposit_amount) }} (10% of the start price). Before a bid is accepted, your held funds must cover the full bid. Wallet balance: {{ "%.2f"|format(current_user['balance']) }} · <a href="{{ url_for('wallet_page') }}">Top up</a></p>
       <button type="submit">Pay deposit {{ "%.2f"|format(deposit_amount) }}</button>
     </form>
     {% endif %}

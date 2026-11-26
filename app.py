@@ -343,7 +343,7 @@ def lot_detail(lot_id):
         ).fetchone()[0],)).fetchone()["email"]
     deposit = None
     if session.get("user_id"):
-        deposit = database.execute("SELECT status FROM deposits WHERE lot_id = ? AND user_id = ?",
+        deposit = database.execute("SELECT status, amount FROM deposits WHERE lot_id = ? AND user_id = ?",
                                   (lot_id, session["user_id"])).fetchone()
     return render_template("lot_detail.html", lot=lot, bids=bids, winner=winner, deposit=deposit,
                            deposit_amount=wallet.deposit_amount(lot["start_price"]),
@@ -484,6 +484,11 @@ def place_bid(lot_id):
         minimum = lot["current_price"] + lot["bid_step"] if previous else lot["start_price"]
         if amount < minimum:
             raise ValueError(f"Bid must be at least {minimum:.2f}.")
+        # The held amount must cover the bidder's entire current maximum bid.
+        # Both reserve changes and the bid are protected by BEGIN IMMEDIATE.
+        wallet.reserve_bid(database, session["user_id"], lot, amount)
+        if previous and previous["bidder_id"] != session["user_id"]:
+            wallet.release_bid_reserve(database, lot, previous["bidder_id"])
         database.execute("INSERT INTO bids (lot_id, bidder_id, amount) VALUES (?, ?, ?)",
                          (lot_id, session["user_id"], amount))
         closes_at = datetime.fromisoformat(lot["closes_at"])

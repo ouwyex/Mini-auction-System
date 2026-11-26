@@ -46,8 +46,8 @@ def record(database, user_id, kind, amount, description, lot_id=None):
     new_balance = round(current + amount, 2)
     if new_balance < 0:
         raise InsufficientFunds(
-            f"Not enough balance: the deposit is {abs(amount):.2f} but you have {current:.2f}. "
-            "Top up your wallet first."
+            f"Not enough balance: this bid needs {abs(amount):.2f} more available funds but you have {current:.2f}. "
+            "The bid was not placed. Top up your wallet first."
         )
     database.execute("UPDATE users SET balance = ? WHERE id = ?", (new_balance, user_id))
     database.execute(
@@ -76,6 +76,38 @@ def pay_deposit(database, user_id, lot):
     record(database, user_id, DEPOSIT_PAID, -amount, f'Deposit for "{lot["title"]}"', lot["id"])
     database.execute("INSERT INTO deposits (lot_id, user_id, amount) VALUES (?, ?, ?)", (lot["id"], user_id, amount))
     return amount
+
+
+def reserve_bid(database, user_id, lot, bid_amount):
+    """Increase the bidder's held funds to cover their full current maximum bid."""
+    deposit = database.execute(
+        "SELECT * FROM deposits WHERE lot_id = ? AND user_id = ? AND status = 'held'",
+        (lot["id"], user_id),
+    ).fetchone()
+    if deposit is None:
+        raise ValueError(f"Pay the {deposit_amount(lot['start_price']):.2f} deposit before bidding on this lot.")
+    target = round(float(bid_amount), 2)
+    difference = round(target - deposit["amount"], 2)
+    if difference > 0:
+        record(database, user_id, DEPOSIT_PAID, -difference,
+               f'Bid reserve for "{lot["title"]}"', lot["id"])
+        database.execute("UPDATE deposits SET amount = ? WHERE id = ?", (target, deposit["id"]))
+    return target
+
+
+def release_bid_reserve(database, lot, user_id):
+    """Release a previous leader's excess reserve, retaining their entry deposit."""
+    deposit = database.execute(
+        "SELECT * FROM deposits WHERE lot_id = ? AND user_id = ? AND status = 'held'",
+        (lot["id"], user_id),
+    ).fetchone()
+    if deposit is not None:
+        retained = deposit_amount(lot["start_price"])
+        released = round(deposit["amount"] - retained, 2)
+        if released > 0:
+            record(database, user_id, DEPOSIT_RETURNED, released,
+                   f'Bid reserve released after being outbid: "{lot["title"]}"', lot["id"])
+            database.execute("UPDATE deposits SET amount = ? WHERE id = ?", (retained, deposit["id"]))
 
 
 def _return(database, deposit, title, reason):
